@@ -1,0 +1,7 @@
+settings.cfg
+_settings.cfg
+PWNgress.sqlite
+old_version.py
+machine_html/*
+users/*
+PWNgress_clean.sqlite
