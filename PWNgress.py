@@ -4,7 +4,7 @@ from collections import OrderedDict
 import discord
 from lumberjack.lumberjack import Lumberjack
 from utils.utils import read_settings_file
-from sqlwizard.sqlwizard import SQLWizard
+from SQLWizard.sqlwizard import SQLWizard
 
 
 class PWNgress(discord.Client):

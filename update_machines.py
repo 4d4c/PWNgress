@@ -3,7 +3,7 @@ import json
 from collections import OrderedDict
 
 from utils.utils import read_settings_file, HTBhelper
-from sqlwizard.sqlwizard import SQLWizard
+from SQLWizard.sqlwizard import SQLWizard
 
 
 def update_machines(db_filename, htb_username, htb_password, htb_api):

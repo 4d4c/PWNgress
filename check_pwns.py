@@ -1,7 +1,7 @@
 from collections import OrderedDict
 
 from utils.utils import read_settings_file, HTBhelper
-from sqlwizard.sqlwizard import SQLWizard
+from SQLWizard.sqlwizard import SQLWizard
 from PWNgress import PWNgress
 
 

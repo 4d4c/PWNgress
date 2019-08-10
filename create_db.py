@@ -1,7 +1,7 @@
 from collections import OrderedDict
 
 from utils.utils import read_settings_file
-from sqlwizard.sqlwizard import SQLWizard
+from SQLWizard.sqlwizard import SQLWizard
 
 
 def create_db(db_filename):

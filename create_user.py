@@ -2,7 +2,7 @@ import sys
 from collections import OrderedDict
 
 from utils.utils import read_settings_file, HTBhelper
-from sqlwizard.sqlwizard import SQLWizard
+from SQLWizard.sqlwizard import SQLWizard
 
 
 def update_record(db, own_type, box_name, username):
