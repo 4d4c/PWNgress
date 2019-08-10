@@ -7,7 +7,9 @@ from SQLWizard.sqlwizard import SQLWizard
 
 def update_record(db, own_type, box_name, username):
     box_data = db.select(own_type, "boxes", "name = '{}'".format(box_name.strip().lower()))
-    if box_data[0][0]:
+    if box_data[0][0] == "-":
+        new_data = username.strip().lower()
+    elif box_data[0][0]:
         new_data = box_data[0][0] + "," + username.strip().lower()
     else:
         new_data = username.strip().lower()
