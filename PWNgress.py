@@ -1,25 +1,10 @@
-import os
-import sqlite3
 import sys
-import time
+from collections import OrderedDict
 
 import discord
 from lumberjack.lumberjack import Lumberjack
-
-
-def read_settings_file(settings_filepath):
-    """
-    Read settings file and return Discord token.
-    """
-
-    if not os.path.exists(settings_filepath):
-        print("[-] ERROR: Settings file is missing")
-        sys.exit(1)
-
-    with open(settings_filepath, "r") as settings_file:
-        settings = settings_file.read().splitlines()
-
-    return dict(setting.split('=') for setting in settings)
+from utils.utils import read_settings_file
+from sqlwizard.sqlwizard import SQLWizard
 
 
 class PWNgress(discord.Client):
@@ -27,11 +12,12 @@ class PWNgress(discord.Client):
     PWNgress.
     """
 
-    def __init__(self, discord_token, db_filename):
+    def __init__(self, discord_token, db_filename, notifications=False):
         self.log = Lumberjack("log/events.log", True)
 
-        self.db_conn = sqlite3.connect(db_filename)
-        self.db_cursor = self.db_conn.cursor()
+        self.db = SQLWizard(db_filename)
+
+        self.notifications = notifications
 
         super().__init__()
         self.run(discord_token)
@@ -39,10 +25,17 @@ class PWNgress(discord.Client):
 
     async def on_ready(self):
         """
-        Print state when PWNgress is ready
+        Print state when PWNgress is ready. If class started with notification parameter,
+        send the messages and kill the process.
         """
 
         self.log.info("PWNgress started")
+
+        if self.notifications:
+            for notification in self.notifications:
+                await self.send_pwn_notification(*notification)
+
+            sys.exit(1)
 
 
     async def on_message(self, message):
@@ -50,6 +43,9 @@ class PWNgress(discord.Client):
         Parse any message except own. If message starts with .status - delete it and return
         information about the box.
         """
+
+        if self.notifications:
+            return False
 
         if message.author == self.user:
             return False
@@ -90,7 +86,7 @@ class PWNgress(discord.Client):
             box_name = message.content.split(" ")[1]
             box_status = self.get_box_status_from_user_input(message.content.split(" ")[2])
 
-            box_data = self.db_select("boxes", "name = '" + box_name + "'")
+            box_data = self.db.select("*", "boxes", "name = '{}".format(box_name))
             if not box_data:
                 self.log.error("Box was not found - " + box_name)
                 return False
@@ -115,25 +111,25 @@ class PWNgress(discord.Client):
             else:
                 root = "-"
 
-            new_data["wts"] = wts
-            new_data["working"] = working
-            new_data["user"] = user
-            new_data["root"] = root
+            new_data["wts"] = wts if wts else "-"
+            new_data["working"] = working if working else "-"
+            new_data["user"] = user if user else "-"
+            new_data["root"] = root if root else "-"
 
             if new_data[box_status] and new_data[box_status] != "-":
                 new_data[box_status] += "," + htb_name
             else:
                 new_data[box_status] = htb_name
 
-            self.db_update(
+            self.db.update(
                 "boxes",
-                "wts = '{}', working = '{}', user = '{}', root = '{}'".format(
-                    new_data["wts"],
-                    new_data["working"],
-                    new_data["user"],
-                    new_data["root"]
-                ),
-                "name = '" + box_name + "'"
+                OrderedDict([
+                    ("wts", new_data["wts"]),
+                    ("working", new_data["working"]),
+                    ("user", new_data["user"]),
+                    ("root", new_data["root"])
+                ]),
+                "name = '{}'".format(box_name)
             )
             self.log.info("Box status updated - " + box_name)
 
@@ -186,10 +182,17 @@ class PWNgress(discord.Client):
         Create new box in the database.
         """
 
-        self.db_insert(
+        self.db.insert(
             "boxes",
-            "name, score, image, wts, working, user, root",
-            ", ".join([box_name, box_score, box_image, wts, working, user, root])
+            OrderedDict([
+                ("name", box_name),
+                ("score", box_score),
+                ("image", box_image),
+                ("wts", wts),
+                ("working", working),
+                ("user", user),
+                ("root", root)
+            ])
         )
 
 
@@ -198,7 +201,7 @@ class PWNgress(discord.Client):
         Get HTB name of the user.
         """
 
-        htb_name = self.db_select("names", "discord_name = '" + str(discord_name).lower() + "'")
+        htb_name = self.db.select("*", "names", "discord_name = '{}'".format(str(discord_name).lower()))
 
         if htb_name:
             self.log.debug("HTB name: " + htb_name[0][1])
@@ -213,7 +216,7 @@ class PWNgress(discord.Client):
         Get Discord name of the user.
         """
 
-        discord_name = self.db_select("names", "htb_name = '" + str(htb_name) + "'")
+        discord_name = self.db.select("*", "names", "htb_name = '{}'".format(htb_name))
 
         if discord_name:
             self.log.debug("Discord name: " + discord_name[0][2])
@@ -228,7 +231,7 @@ class PWNgress(discord.Client):
         Get Discord ID of the user.
         """
 
-        discord_id = self.db_select("names", "discord_name = '{name}' or htb_name = '{name}'".format(name=name))
+        discord_id = self.db.select("*", "names", "discord_name = '{name}' or htb_name = '{name}'".format(name=name))
 
         if discord_id:
             self.log.debug("Discord ID: " + discord_id[0][0])
@@ -267,7 +270,7 @@ class PWNgress(discord.Client):
         Get status information for the box by box name.
         """
 
-        box_data = self.db_select("boxes", "name = '" + box_name + "'")
+        box_data = self.db.select("*", "boxes", "name = '{}'".format(box_name))
 
         if box_data:
             embed = discord.Embed(title=box_data[0][0].upper(), description=box_data[0][1], color=0x2B78E3)
@@ -282,48 +285,10 @@ class PWNgress(discord.Client):
         return False
 
 
-    def db_select(self, table, where=False):
-        """
-        Get data from the table. Select all rows if where is not specified.
-        """
-
-        if where:
-            self.db_cursor.execute("SELECT * FROM " + table + " WHERE " + where)
-        else:
-            self.db_cursor.execute("SELECT * FROM " + table)
-
-        return self.db_cursor.fetchall()
-
-
-    def db_insert(self, table, columns, data):
-        """
-        Insert data into table.
-        """
-
-        self.db_cursor.execute(
-            "INSERT INTO {} ({}) VALUES({})".format(
-                table,
-                columns,
-                data
-            )
-        )
-        self.db_conn.commit()
-
-
-    def db_update(self, table, data, where):
-        """
-        Update row in the table.
-        """
-
-        self.db_cursor.execute(
-            "UPDATE {} SET {} WHERE {}".format(
-                table,
-                data,
-                where
-            )
-        )
-        self.db_conn.commit()
-
+    async def send_pwn_notification(self, channel, username, action, box_name):
+        channel = self.get_channel(int(channel))
+        self.log.info("Sending notification for {} on {} ({})".format(action, box_name, username))
+        await channel.send("User {} owned {} on {}!".format(username, action, box_name))
 
 
 def main():
