@@ -83,7 +83,7 @@ class PWNgress(discord.Client):
             return True
 
         if len(message.content.split(" ")) == 3:
-            box_name = message.content.split(" ")[1]
+            box_name = message.content.split(" ")[1].lower()
             box_status = self.get_box_status_from_user_input(message.content.split(" ")[2])
 
             box_data = self.db.select("*", "boxes", "name = '{}'".format(box_name))
@@ -205,7 +205,7 @@ class PWNgress(discord.Client):
 
         if htb_name:
             self.log.debug("HTB name: " + htb_name[0][1])
-            return htb_name[0][1]
+            return htb_name[0][1].lower()
 
         self.log.error("HTB name was not found - " + discord_name)
         return False
@@ -219,10 +219,10 @@ class PWNgress(discord.Client):
         discord_name = self.db.select("*", "names", "htb_name = '{}'".format(htb_name.lower()))
 
         if discord_name:
-            self.log.debug("Discord name: " + discord_name[0][2])
+            self.log.debug("Discord name: " + discord_name[0][2].lower())
             return discord_name[0][2]
 
-        self.log.error("Discord name was not found - " + htb_name)
+        self.log.error("Discord name was not found - " + htb_name.lower())
         return False
 
 
@@ -234,10 +234,10 @@ class PWNgress(discord.Client):
         discord_id = self.db.select("*", "names", "discord_name = '{name}' or htb_name = '{name}'".format(name=name.lower()))
 
         if discord_id:
-            self.log.debug("Discord ID: " + discord_id[0][0])
-            return discord_id[0][0]
+            self.log.debug("Discord ID: " + discord_id[0][0].lower())
+            return discord_id[0][0].lower()
 
-        self.log.error("Discord ID was not found - " + name)
+        self.log.error("Discord ID was not found - " + name.lower())
         return False
 
 
@@ -292,7 +292,7 @@ class PWNgress(discord.Client):
 
 
 def main():
-    settings = read_settings_file("local_settings.cfg")
+    settings = read_settings_file("settings.cfg")
     PWNgress(settings["TOKEN"], settings["DB_FILENAME"])
 
 
