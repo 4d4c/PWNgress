@@ -86,7 +86,7 @@ class PWNgress(discord.Client):
             box_name = message.content.split(" ")[1]
             box_status = self.get_box_status_from_user_input(message.content.split(" ")[2])
 
-            box_data = self.db.select("*", "boxes", "name = '{}".format(box_name))
+            box_data = self.db.select("*", "boxes", "name = '{}'".format(box_name))
             if not box_data:
                 self.log.error("Box was not found - " + box_name)
                 return False
@@ -216,7 +216,7 @@ class PWNgress(discord.Client):
         Get Discord name of the user.
         """
 
-        discord_name = self.db.select("*", "names", "htb_name = '{}'".format(htb_name))
+        discord_name = self.db.select("*", "names", "htb_name = '{}'".format(htb_name.lower()))
 
         if discord_name:
             self.log.debug("Discord name: " + discord_name[0][2])
@@ -231,7 +231,7 @@ class PWNgress(discord.Client):
         Get Discord ID of the user.
         """
 
-        discord_id = self.db.select("*", "names", "discord_name = '{name}' or htb_name = '{name}'".format(name=name))
+        discord_id = self.db.select("*", "names", "discord_name = '{name}' or htb_name = '{name}'".format(name=name.lower()))
 
         if discord_id:
             self.log.debug("Discord ID: " + discord_id[0][0])
@@ -292,7 +292,7 @@ class PWNgress(discord.Client):
 
 
 def main():
-    settings = read_settings_file("settings.cfg")
+    settings = read_settings_file("local_settings.cfg")
     PWNgress(settings["TOKEN"], settings["DB_FILENAME"])
 
 
