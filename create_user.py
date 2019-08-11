@@ -52,8 +52,8 @@ def create_user(discord_id, url, discord_name, db_filename, htb_username, htb_pa
         "names",
         OrderedDict([
             ("id", discord_id),
-            ("htb_name", username),
-            ("discord_name", discord_name)
+            ("htb_name", username.lower()),
+            ("discord_name", discord_name.lower())
         ])
     )
 
