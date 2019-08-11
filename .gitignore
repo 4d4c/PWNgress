@@ -1,8 +1,6 @@
+__pycache__/*
+utils/__pycache__/*
 settings.cfg
-_settings.cfg
+local_settings.cfg
 PWNgress.sqlite
-old_version.py
-machine_html/*
-users/*
-PWNgress_clean.sqlite
 log/*
