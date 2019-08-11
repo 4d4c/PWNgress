@@ -13,7 +13,7 @@ class PWNgress(discord.Client):
     """
 
     def __init__(self, discord_token, db_filename, notifications=False):
-        self.log = Lumberjack("log/events.log", True)
+        self.log = Lumberjack("log/PWNgress_events.log", True)
 
         self.db = SQLWizard(db_filename)
 
@@ -288,7 +288,7 @@ class PWNgress(discord.Client):
     async def send_pwn_notification(self, channel, username, action, box_name):
         channel = self.get_channel(int(channel))
         self.log.info("Sending notification for {} on {} ({})".format(action, box_name, username))
-        await channel.send("User {} owned {} on {}!".format(username, action, box_name))
+        await channel.send(">>> **{}** owned {} on {}!".format(username.capitalize(), action, box_name.upper()))
 
 
 def main():

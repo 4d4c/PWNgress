@@ -3,4 +3,5 @@ utils/__pycache__/*
 settings.cfg
 local_settings.cfg
 PWNgress.sqlite
+local_PWNgress.sqlite
 log/*
