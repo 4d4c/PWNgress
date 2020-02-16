@@ -101,7 +101,7 @@ class HTBhelper():
             html = req.text
 
             users = re.findall(r'\d+\\">(?P<name>.{1,20}?)<\\\/a>\sowned\suser\son\s<.+?">(?P<asd>.+?)<\\\/', html)
-            roots = re.findall(r'\d+\\">(?P<name>.{1,20}?)<\\\/a>\sowned\sroot\son\s<.+?">(?P<asd>.+?)<\\\/', html)
+            roots = re.findall(r'\d+\\">(?P<name>.{1,20}?)<\\\/a>\sowned\s(?:root|system)\son\s<.+?">(?P<asd>.+?)<\\\/', html)
 
             return users, roots
 
