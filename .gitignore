@@ -4,4 +4,4 @@ settings.cfg
 local_settings.cfg
 PWNgress.sqlite
 local_PWNgress.sqlite
-log/*
+logs/*
