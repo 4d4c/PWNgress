@@ -1,7 +1,6 @@
+import hashlib
 import os
 import sys
-import requests
-import re
 
 
 def read_settings_file(settings_filepath):
@@ -17,3 +16,14 @@ def read_settings_file(settings_filepath):
         settings = settings_file.read().splitlines()
 
     return dict(setting.split('=') for setting in settings)
+
+
+def create_sha256_hash(str_to_hash):
+    """
+    Generate SHA-256 hash.
+    """
+
+    sha256_hash = hashlib.new("sha256")
+    sha256_hash.update(str_to_hash.encode())
+
+    return sha256_hash.hexdigest()

@@ -1,7 +1,6 @@
-__pycache__/*
-utils/__pycache__/*
-settings.cfg
-local_settings.cfg
-PWNgress.sqlite
-local_PWNgress.sqlite
+database/*
 logs/*
+src/test_data.json
+src/settings/*
+src/utils/__pycache__/*
+__pycache__/*

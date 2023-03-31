@@ -1,6 +1,6 @@
 [submodule "lumberjack"]
-	path = lumberjack
+	path = src/lumberjack
 	url = https://github.com/4d4c/lumberjack.git
 [submodule "SQLWizard"]
-	path = SQLWizard
+	path = src/SQLWizard
 	url = https://github.com/4d4c/SQLWizard.git
