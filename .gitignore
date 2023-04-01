@@ -1,6 +1,7 @@
-database/*
+database/PWNgress.sqlite
 logs/*
-src/test_data.json
+src/test_*
 src/settings/*
 src/utils/__pycache__/*
 __pycache__/*
+image_test/*
