@@ -286,6 +286,49 @@ class PWNgress():
                 # in short amount of time
                 time.sleep(5)
 
+    def create_image(self):
+        """
+        WIP method to create image in Python.
+        """
+
+        from PIL import Image, ImageOps, ImageDraw, ImageFilter, ImageFont
+        import cv2
+        import numpy as np
+
+        width = 500
+        height = 110
+
+        background_layer = Image.new(mode="RGB", size=(width, height), color=(43, 45, 49))
+
+        # Discord image
+        discord_image= Image.open('discord_image.webp')
+        discord_image.thumbnail((84, 84))
+        background_layer.paste(discord_image, (13, 13))
+
+        # Machine image
+        machine_img = Image.open("machine.png")
+        new_machine_img = Image.new("RGBA", machine_img.size, (43, 45, 49))
+        new_machine_img.paste(machine_img, (0, 0), machine_img)
+        new_machine_img.thumbnail((84, 84))
+        background_layer.paste(new_machine_img, (500-84-13, 13), new_machine_img)
+
+        # Frame image
+        frame_img = Image.open('frame.png')
+        img_thumb = frame_img.copy()
+        img = img_thumb.resize((100, 90), Image.ANTIALIAS)
+        background_layer.paste(img, (6, 9), img)
+
+        # Text
+        image_editable = ImageDraw.Draw(background_layer)
+        font = ImageFont.truetype("./Oswald-Bold.ttf", size=30)
+        font1 = ImageFont.truetype("./Oswald-Bold.ttf", size=15)
+        image_editable.text((20+84+13, 20), "USER", fill=(46, 134, 171), font=font)
+        image_editable.text((20+84+13, 65), "Owned root on Escape machine", fill=(255, 255, 255), font=font1)
+
+        # Show/Save
+        background_layer.show()
+        background_layer.save("pwn_test.png")
+
     def send_message(self, member_name, activity_data):
         """
         Send message in Discord using Webhook.
