@@ -5,3 +5,4 @@ src/settings/*
 src/utils/__pycache__/*
 __pycache__/*
 image_test/*
+images/*

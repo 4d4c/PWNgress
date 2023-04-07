@@ -1,8 +1,11 @@
 from collections import OrderedDict
 from datetime import datetime
+from PIL import Image, ImageDraw, ImageFont
+import io
 import json
 import os
 import requests
+import textwrap
 import time
 import traceback
 
@@ -17,9 +20,12 @@ class PWNgress():
     """
 
     def __init__(self, htb_app_token, htb_team_id, discord_webhook_url):
-        self.log = Lumberjack("logs/PWNgress_events.log", True)
+        # TODO: better logging messages
+        # TODO: move testing data to somewhere else
+        # TODO: clean up image folder
+        self.log = Lumberjack("../logs/PWNgress_events.log", True)
 
-        self.db = SQLWizard("database/PWNgress.sqlite")
+        self.db = SQLWizard("../database/PWNgress.sqlite")
 
         self.log.info("PWNgress started")
 
@@ -27,41 +33,9 @@ class PWNgress():
         self.htb_team_id = htb_team_id
         self.discord_webhook_url = discord_webhook_url
 
-        # This hash will be used to prevent sending multiple messages on the same
-        # member activity event (user submitted flag)
-        # self.last_flag_hash_filename = "logs/PWNgress_last_flag_hash.log"
-        # self.get_last_flag_hash()
-
         # Run the script every minute
+        # TODO: Change how often we are running depending on the time
         self.loop(60)
-
-    def get_last_flag_hash(self):
-        """
-        Read SHA256 hash of the last activity from `self.last_flag_hash_filename` file.
-        If file doesn't exist it means that we are running the script for the first time.
-        """
-
-        # TODO: remove
-        self.log.info("Getting last flag hash")
-
-        if not os.path.exists(self.last_flag_hash_filename):
-            self.last_flag_hash = ""
-            self.log.warning("Last flag hash was not set")
-        else:
-            with open(self.last_flag_hash_filename, "r") as in_file:
-                self.last_flag_hash = in_file.readline().strip()
-                self.log.debug("Got last flag hash: " + self.last_flag_hash)
-
-    def set_last_flag_hash(self):
-        """
-        Write SHA256 hash of the last activity to `self.last_flag_hash_filename` file.
-        """
-
-        # TODO: remove
-        self.log.info("Saving last flag hash: " + self.last_flag_hash)
-
-        with open(self.last_flag_hash_filename, "w") as in_file:
-            in_file.write(self.last_flag_hash)
 
     def loop(self, delay):
         """
@@ -70,10 +44,8 @@ class PWNgress():
 
         while True:
             self.get_and_save_team_members()
+            # TODO: right now we will post it in order of the members, not in order of solves
             self.check_each_team_member_solves()
-            # self.get_team_activities()
-            # with open("test_data.json", "r") as f:
-            #     self.process_team_activities(json.load(f))
 
             time.sleep(delay)
 
@@ -108,13 +80,16 @@ class PWNgress():
                 self.log.debug("Team member {} already in the database".format(member_data["id"]))
                 continue
 
+            # TODO: update the information
             self.log.debug("Adding new team member {}".format(member_data["id"]))
 
             self.db.insert(
                 "htb_team_members",
                 OrderedDict([
                     ("id", member_data["id"]),
-                    ("name", member_data["name"]),
+                    ("htb_name", member_data["name"]),
+                    ("discord_name", ""),  # Leavet discord name empty
+                    ("htb_avatar", "https://www.hackthebox.com" + member_data["avatar"]),
                     ("last_flag_date", ""),  # Leaving last flag empty as we don't know it yet
                     ("points", member_data["points"]),
                     ("rank", member_data["rank"]),
@@ -130,11 +105,12 @@ class PWNgress():
         self.log.info("Checking team members solves")
 
         # Get all team members from the database
-        found_member_rows = self.db.select("id, name, last_flag_date", "htb_team_members")
+        found_member_rows = self.db.select("id, htb_name, last_flag_date", "htb_team_members")
         for found_member_row in found_member_rows:
             member_id = found_member_row[0]
             member_name = found_member_row[1]
             member_last_flag_date = found_member_row[2]
+            self.log.info("Checking {} ({}) solves".format(member_name, member_id))
 
             member_solves_json = self.get_user_activities(member_id)
             # with open("test_member_activity_{}.json".format(member_id), "r") as f:
@@ -167,7 +143,7 @@ class PWNgress():
                 last_flag_date_from_api = datetime.strptime(activity_data["date"], date_format)
 
                 if last_flag_date_from_api > last_flag_date_from_db:
-                    self.send_message(member_name, activity_data)
+                    self.send_message(member_id, member_name, activity_data)
 
             self.db.update(
                 "htb_team_members",
@@ -203,193 +179,183 @@ class PWNgress():
             self.log.error("Failed to get member activities " + str(err))
             return ""
 
-    def get_team_activities(self):
+    def create_image(self, htb_name, htb_user_avatar_url, htb_flag_type, message):
         """
-        Use HTB API to obtain all member activities. Because HTB team activiites are delayed
-        by ~30 min, we don't use this method.
-        """
-
-        self.log.info("Getting team activities")
-
-        try:
-            team_activity_link = "https://www.hackthebox.com" \
-                                 "/api/v4/team/activity/{}?n_past_days=1".format(self.htb_team_id)
-
-            headers = {
-                "Authorization": "Bearer " + self.htb_app_token,
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0)"
-                              "Gecko/20100101 Firefox/111.0"
-            }
-
-            r = requests.get(team_activity_link, headers=headers)
-            team_activity_json_data = json.loads(r.text)
-
-            self.process_team_activities(team_activity_json_data)
-
-            self.log.debug("Found {} activities".format(len(team_activity_json_data)))
-        except Exception as err:
-            self.log.error("Failed to get team activities " + str(err))
-
-    def process_team_activities(self, team_activity_json_data):
-        """
-        For each new activity send notification
+        Create notification image. The image will consist of HTB user avatar, frame layers over the avatar,
+        message describing flag obtained and image of the Flag.
+        htb_flag_type - parameters is URL of the machine or type of the challenge.
         """
 
-        self.log.info("Processing team activities")
-
-        # Flag to track if we found new activity (someone got a new flag)
-        new_flag = False
-
-        # If it's the first time the script is executed and the last flag hash is not set,
-        # get last activity hash and save it.
-        if self.last_flag_hash == "":
-            self.log.warning("Empty flag hash")
-
-            # Hash is created from date when flag was obtained and HTB member ID
-            activity_hash_str = "{}-{}".format(team_activity_json_data[0]["date"],
-                                               str(team_activity_json_data[0]["user"]["id"]))
-            self.last_flag_hash = create_sha256_hash(activity_hash_str)
-            # Save last activity hash in file
-            self.set_last_flag_hash()
-
-            return
-
-        # Reverse the order of the JSON we received from HTB. This will allow us to
-        # to create notification in order in which the flags were obtained.
-        for activity_data in reversed(team_activity_json_data):
-            # Hash is created from date when flag was obtained and HTB member ID
-            activity_hash_str = activity_data["date"] + "-" + str(activity_data["user"]["id"])
-            activity_hash = create_sha256_hash(activity_hash_str)
-
-            self.log.debug("Processing team activity: " + activity_hash)
-
-            # If we found activity that we notified the last we skip it and set the `new_flag`
-            if self.last_flag_hash == activity_hash:
-                self.log.info("Found new team activity")
-                new_flag = True
-                continue
-
-            # If we found new activity, we send the notification to Discord handler
-            if new_flag:
-                self.last_flag_hash = activity_hash
-
-                self.log.debug("New activity data: " + activity_hash_str)
-                self.log.debug("New activity hash: " + activity_hash)
-
-                # Send message in the discord
-                self.send_message(activity_data)
-
-                # Save last activity hash in file
-                self.set_last_flag_hash()
-
-                # TODO: Added this for testing to prevent sending large number of messages
-                # in short amount of time
-                time.sleep(5)
-
-    def create_image(self):
-        """
-        WIP method to create image in Python.
-        """
-
-        from PIL import Image, ImageOps, ImageDraw, ImageFilter, ImageFont
-        import cv2
-        import numpy as np
-
+        # TODO: Move font names to settings file?
+        # Size of notification image
         width = 500
         height = 110
+        avatar_size = 80
+        flag_size = 80
+        margin_size = 15
 
-        background_layer = Image.new(mode="RGB", size=(width, height), color=(43, 45, 49))
+        # Final image filename
+        notification_filename = "/tmp/PWN.png"
 
-        # Discord image
-        discord_image= Image.open('discord_image.webp')
-        discord_image.thumbnail((84, 84))
-        background_layer.paste(discord_image, (13, 13))
+        # Colors used in the notification
+        background_color = (43, 45, 49)
+        white_color = (255, 255, 255)
+        red_color = (255, 0, 0)
+        green_color = (0, 255, 0)
+        endgame_color = (0, 134, 255)
+        fortress_color = (148, 0, 255)
+        challenge_color = (159, 239, 0)
 
-        # Machine image
-        machine_img = Image.open("machine.png")
-        new_machine_img = Image.new("RGBA", machine_img.size, (43, 45, 49))
+        # HTTP headers for image downloading
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0)"
+                          "Gecko/20100101 Firefox/111.0"
+        }
+
+        # Create main surface for the notification
+        background_layer = Image.new(mode="RGB", size=(width, height), color=background_color)
+
+        # Download HTB user image
+        try:
+            req = requests.get(htb_user_avatar_url, headers=headers)
+        except Exception as err:
+            self.log.error("Failed to get member image " + str(err))
+            return False
+
+        # Create Discord image
+        discord_image = Image.open(io.BytesIO(req.content))
+        discord_image.thumbnail((avatar_size, avatar_size))
+        background_layer.paste(discord_image, (margin_size, margin_size))
+
+        # Create flag/machine image
+        if "hackthebox" in htb_flag_type:
+            # If it's a machine flag we are passing URL and we need to download the image
+            try:
+                req = requests.get(htb_flag_type, headers=headers)
+                machine_img = Image.open(io.BytesIO(req.content))
+            except Exception as err:
+                self.log.error("Failed to get machine image " + str(err))
+                return False
+        else:
+            # If it's challenge, endgame or fortress flag we use local image
+            machine_img = Image.open("../images/{}.png".format(htb_flag_type.lower()))
+
+        new_machine_img = Image.new("RGBA", machine_img.size, background_color)
         new_machine_img.paste(machine_img, (0, 0), machine_img)
-        new_machine_img.thumbnail((84, 84))
-        background_layer.paste(new_machine_img, (500-84-13, 13), new_machine_img)
+        new_machine_img.thumbnail((flag_size, flag_size))
+        background_layer.paste(new_machine_img, (width - flag_size - margin_size, margin_size), new_machine_img)
 
         # Frame image
-        frame_img = Image.open('frame.png')
+        frame_img = Image.open('../images/avatar_frame.png').convert("RGBA")
         img_thumb = frame_img.copy()
-        img = img_thumb.resize((100, 90), Image.ANTIALIAS)
-        background_layer.paste(img, (6, 9), img)
+        img = img_thumb.resize((height, height))
+        background_layer.paste(img, (0, 0), img)
 
-        # Text
+        # Message text
         image_editable = ImageDraw.Draw(background_layer)
-        font = ImageFont.truetype("./Oswald-Bold.ttf", size=30)
-        font1 = ImageFont.truetype("./Oswald-Bold.ttf", size=15)
-        image_editable.text((20+84+13, 20), "USER", fill=(46, 134, 171), font=font)
-        image_editable.text((20+84+13, 65), "Owned root on Escape machine", fill=(255, 255, 255), font=font1)
+        image_editable.fontmode = "L"
 
-        # Show/Save
-        background_layer.show()
-        background_layer.save("pwn_test.png")
+        # If username is too big, we decrease the font size until it fits between avatar and flag images
+        font_htb_name_size = 32
+        while True:
+            font_htb_name = ImageFont.truetype("../images/NoizeSport.ttf", size=font_htb_name_size, layout_engine=0)
+            if font_htb_name.getsize(htb_name)[0] < 300:
+                x_pos = width // 2 - font_htb_name.getsize(htb_name)[0] // 2 + 5
+                image_editable.text((x_pos, margin_size), htb_name, fill=white_color, font=font_htb_name)
+                break
+            else:
+                font_htb_name_size -= 1
 
-    def send_message(self, member_name, activity_data):
+        font_message = ImageFont.truetype("../images/Fixedsys.ttf", size=18, layout_engine=0)
+        if message[1] == "ROOT " or message[1] == "USER ":
+            # Machine message
+            x_pos_1 = width // 2 - font_message.getsize("".join(message))[0] // 2 + 5
+            x_pos_2 = x_pos_1 + font_message.getsize(message[0])[0]
+            x_pos_3 = x_pos_2 + font_message.getsize(message[1])[0]
+
+            image_editable.text((x_pos_1, 70), message[0], fill=white_color, font=font_message)
+            if message[1] == "ROOT ":
+                image_editable.text((x_pos_2, 70), message[1], fill=red_color, font=font_message)
+            else:
+                image_editable.text((x_pos_2, 70), message[1], fill=green_color, font=font_message)
+            image_editable.text((x_pos_3, 70), message[2], fill=white_color, font=font_message)
+        else:
+            # Challenge, endgame or fortress message
+            x_pos_1 = width // 2 - font_message.getsize("".join([message[0], message[1]]))[0] // 2 + 5
+            x_pos_2 = x_pos_1 + font_message.getsize("".join(message[0]))[0]
+            x_pos_3 = width // 2 - font_message.getsize(message[2])[0] // 2 + 5
+
+            image_editable.text((x_pos_1, 65), message[0], fill=white_color, font=font_message)
+            if "endgame" in message[2]:
+                image_editable.text((x_pos_2, 65), message[1], fill=endgame_color, font=font_message)
+            elif "fortress" in message[2]:
+                image_editable.text((x_pos_2, 65), message[1], fill=fortress_color, font=font_message)
+            elif "challenge" in message[2]:
+                image_editable.text((x_pos_2, 65), message[1], fill=challenge_color, font=font_message)
+            image_editable.text((x_pos_3, 80), message[2], fill=white_color, font=font_message)
+
+        # background_layer.show()
+
+        # Save image as a file and return
+        background_layer.save(notification_filename)
+
+        return notification_filename
+
+    def send_message(self, member_id, htb_name, activity_data):
         """
         Send message in Discord using Webhook.
-        Currently implemented using embed element.
         """
 
         self.log.info("Send message")
 
-        try:
-            headers = {
-                "Content-type": "application/json"
+        htb_user_avatar_url = self.db.select("htb_avatar", "htb_team_members", f"id = '{member_id}'")[0][0]
+
+        # Create different messages for different type of solves and assign flag type (machine/challenge)
+        message = ""
+        htb_flag_type = ""
+        if activity_data["object_type"] == "machine":
+            message = [
+                "Owned ",
+                activity_data["type"].upper() + " ",
+                activity_data["name"] + " " + activity_data["object_type"]
+            ]
+            htb_flag_type = "https://www.hackthebox.com" + activity_data["machine_avatar"].replace("_thumb", "")
+        elif activity_data["object_type"] == "challenge":
+            message = [
+                "Owned ",
+                activity_data["name"],
+                activity_data["challenge_category"] + " " + activity_data["object_type"]
+            ]
+            htb_flag_type = activity_data["challenge_category"]
+        elif activity_data["object_type"] == "fortress":
+            message = [
+                "Owned ",
+                activity_data["flag_title"],
+                activity_data["name"] + " " + activity_data["object_type"]
+            ]
+            htb_flag_type = activity_data["object_type"]
+        elif activity_data["object_type"] == "endgame":
+            message = [
+                "Owned ",
+                activity_data["flag_title"],
+                activity_data["name"] + " " + activity_data["object_type"]
+            ]
+            htb_flag_type = activity_data["object_type"]
+
+        # Create notification image
+        notification_filename = self.create_image(htb_name, htb_user_avatar_url, htb_flag_type, message)
+
+        # Send image to Discord
+        if notification_filename:
+            image_file = {
+                "PWN": open(notification_filename, "rb")
             }
 
-            # Placeholder for message thumbnails. HTB stores challenges and fortress images in SVG
-            # format that is not supported by Discord API.
-            # We can adjust all this code to whatever message design we want
-            if activity_data["object_type"] == "challenge":
-                thumbnail_url = "https://pbs.twimg.com"\
-                                "/profile_images/1610589411682418690/GBT-ZJlC_400x400.jpg"
-            elif activity_data["object_type"] == "fortress":
-                thumbnail_url = "https://pbs.twimg.com"\
-                                "/profile_images/1610589411682418690/GBT-ZJlC_400x400.jpg"
-            elif activity_data["object_type"] == "machine":
-                thumbnail_url = "https://www.hackthebox.com" + activity_data["machine_avatar"]
-
-            # Craft specific message descriptions for each type of flag
-            if activity_data["object_type"] == "challenge":
-                description = "Owned **{}** {} {}".format(activity_data["name"],
-                                                          activity_data["challenge_category"].lower(),
-                                                          activity_data["object_type"])
-            elif activity_data["object_type"] == "fortress":
-                description = "Owned **{}** flag in {} {}".format(activity_data["flag_title"],
-                                                                  activity_data["name"],
-                                                                  activity_data["object_type"])
-            elif activity_data["object_type"] == "machine":
-                description = "Owned **{}** on {} {}".format(activity_data["type"],
-                                                             activity_data["name"],
-                                                             activity_data["object_type"])
-
-            # Create Discord embed element
-            embed_json = {
-                "content": "",
-                "embeds": [
-                    {
-                        "type": "rich",
-                        "title": member_name.upper(),
-                        "description": description,
-                        "timestamp": activity_data["date"],
-                        # TODO: add blue colour for challenges and purple for fortress
-                        "color": "16711680" if activity_data["type"] == "root" else "2293504",
-                        "thumbnail": {
-                            "url": thumbnail_url
-                        }
-                    }
-                ]
-            }
-
-            r = requests.post(self.discord_webhook_url, headers=headers, json=embed_json)
-        except Exception as err:
-            self.log.error("Failed to send Discord message")
-            self.log.error(traceback.print_exc())
+            try:
+                r = requests.post(self.discord_webhook_url, files=image_file)
+            except Exception as err:
+                self.log.error("Failed to send Discord message")
+                self.log.error(traceback.print_exc())
 
 
 def main():
@@ -397,5 +363,5 @@ def main():
     PWNgress(settings["HTB_APP_TOKEN"], settings["HTB_TEAM_ID"], settings["DISCORD_WEBHOOK_URL"])
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
