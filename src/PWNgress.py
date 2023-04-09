@@ -20,6 +20,8 @@ class PWNgress():
     """
 
     def __init__(self, htb_app_token, htb_team_id, discord_webhook_url):
+        # TODO: Add README
+        # TODO: Rotate keys
         # TODO: better logging messages
         # TODO: move testing data to somewhere else
         # TODO: clean up image folder
@@ -88,9 +90,9 @@ class PWNgress():
                 OrderedDict([
                     ("id", member_data["id"]),
                     ("htb_name", member_data["name"]),
-                    ("discord_name", ""),  # Leavet discord name empty
+                    ("discord_name", ""),  # Leave discord name empty
                     ("htb_avatar", "https://www.hackthebox.com" + member_data["avatar"]),
-                    ("last_flag_date", ""),  # Leaving last flag empty as we don't know it yet
+                    ("last_flag_date", ""),  # Leave last flag empty as we don't know it yet
                     ("points", member_data["points"]),
                     ("rank", member_data["rank"]),
                     ("json_data", json.dumps(member_data))
@@ -285,6 +287,9 @@ class PWNgress():
             x_pos_2 = x_pos_1 + font_message.getsize("".join(message[0]))[0]
             x_pos_3 = width // 2 - font_message.getsize(message[2])[0] // 2 + 5
 
+            # Shorten name of the long flags
+            if len(message[0]) > 30:
+                message = message[0][:25] + "..."
             image_editable.text((x_pos_1, 65), message[0], fill=white_color, font=font_message)
             if "endgame" in message[2]:
                 image_editable.text((x_pos_2, 65), message[1], fill=endgame_color, font=font_message)
@@ -331,7 +336,8 @@ class PWNgress():
             message = [
                 "Owned ",
                 activity_data["flag_title"],
-                activity_data["name"] + " " + activity_data["object_type"]
+                # Shorten name for Context fortress
+                activity_data["name"].replace("Cyber Attack Simulation", "") + " " + activity_data["object_type"]
             ]
             htb_flag_type = activity_data["object_type"]
         elif activity_data["object_type"] == "endgame":
