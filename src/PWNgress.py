@@ -19,12 +19,8 @@ class PWNgress():
     PWNgress.
     """
 
-    def __init__(self, htb_app_token, htb_team_id, discord_webhook_url):
+    def __init__(self, htb_app_token, htb_team_id, discord_webhook_url, font_htb_name, font_message):
         # TODO: Add README
-        # TODO: Rotate keys
-        # TODO: better logging messages
-        # TODO: move testing data to somewhere else
-        # TODO: clean up image folder
         self.log = Lumberjack("../logs/PWNgress_events.log", True)
 
         self.db = SQLWizard("../database/PWNgress.sqlite")
@@ -34,9 +30,12 @@ class PWNgress():
         self.htb_app_token = htb_app_token
         self.htb_team_id = htb_team_id
         self.discord_webhook_url = discord_webhook_url
+        self.font_htb_name = font_htb_name
+        self.font_message = font_message
+
+        self.message_queue = {}
 
         # Run the script every minute
-        # TODO: Change how often we are running depending on the time
         self.loop(60)
 
     def loop(self, delay):
@@ -46,8 +45,8 @@ class PWNgress():
 
         while True:
             self.get_and_save_team_members()
-            # TODO: right now we will post it in order of the members, not in order of solves
             self.check_each_team_member_solves()
+            self.send_messages()
 
             time.sleep(delay)
 
@@ -72,32 +71,49 @@ class PWNgress():
             team_members_json_data = json.loads(r.text)
         except Exception as err:
             self.log.error("Failed to get team members " + str(err))
+            return
 
-        # with open("test_team_members.json", "r") as f:
+        # with open("test/test_team_members.json", "w") as f:
+        #     json.dump(team_members_json_data, f)
+        # with open("test/test_team_members.json", "r") as f:
         #     team_members_json_data = json.load(f)
 
         for member_data in team_members_json_data:
             # Check if the team member is already in the database
             if self.db.select("id", "htb_team_members", "id = '{}'".format(member_data["id"])):
-                self.log.debug("Team member {} already in the database".format(member_data["id"]))
-                continue
-
-            # TODO: update the information
-            self.log.debug("Adding new team member {}".format(member_data["id"]))
-
-            self.db.insert(
-                "htb_team_members",
-                OrderedDict([
-                    ("id", member_data["id"]),
-                    ("htb_name", member_data["name"]),
-                    ("discord_name", ""),  # Leave discord name empty
-                    ("htb_avatar", "https://www.hackthebox.com" + member_data["avatar"]),
-                    ("last_flag_date", ""),  # Leave last flag empty as we don't know it yet
-                    ("points", member_data["points"]),
-                    ("rank", member_data["rank"]),
-                    ("json_data", json.dumps(member_data))
-                ])
-            )
+                self.log.debug("Team member {} ({}) already in the database".format(
+                    member_data["name"],
+                    member_data["id"]
+                ))
+                self.db.update(
+                    "htb_team_members",
+                    OrderedDict([
+                        ("htb_name", member_data["name"]),
+                        ("htb_avatar", "https://www.hackthebox.com" + member_data["avatar"]),
+                        ("points", member_data["points"]),
+                        ("rank", member_data["rank"]),
+                        ("json_data", json.dumps(member_data))
+                    ]),
+                    "id = '{}'".format(member_data["id"])
+                )
+            else:
+                self.log.debug("Adding new team member {} ({})".format(
+                    member_data["name"],
+                    member_data["id"]
+                ))
+                self.db.insert(
+                    "htb_team_members",
+                    OrderedDict([
+                        ("id", member_data["id"]),
+                        ("htb_name", member_data["name"]),
+                        ("discord_name", ""),  # Leave discord name empty
+                        ("htb_avatar", "https://www.hackthebox.com" + member_data["avatar"]),
+                        ("last_flag_date", ""),  # Leave last flag empty as we don't know it yet
+                        ("points", member_data["points"]),
+                        ("rank", member_data["rank"]),
+                        ("json_data", json.dumps(member_data))
+                    ])
+                )
 
     def check_each_team_member_solves(self):
         """
@@ -112,10 +128,11 @@ class PWNgress():
             member_id = found_member_row[0]
             member_name = found_member_row[1]
             member_last_flag_date = found_member_row[2]
-            self.log.info("Checking {} ({}) solves".format(member_name, member_id))
 
-            member_solves_json = self.get_user_activities(member_id)
-            # with open("test_member_activity_{}.json".format(member_id), "r") as f:
+            member_solves_json = self.get_user_activities(member_name, member_id)
+            # with open("test/test_member_activity_{}.json".format(member_id), "w") as f:
+            #     json.dump(member_solves_json, f)
+            # with open("test/test_member_activity_{}.json".format(member_id), "r") as f:
             #     member_solves_json = json.load(f)
 
             if member_solves_json == "":
@@ -136,8 +153,6 @@ class PWNgress():
                 )
                 continue
 
-            # Reverse the order of the JSON we received from HTB. This will allow us to
-            # to create notification in order in which the flags were obtained
             for activity_data in reversed(member_solves_json["profile"]["activity"]):
                 # Compare dates and send flag if newer
                 date_format = "%Y-%m-%dT%H:%M:%S.%fZ"
@@ -145,7 +160,13 @@ class PWNgress():
                 last_flag_date_from_api = datetime.strptime(activity_data["date"], date_format)
 
                 if last_flag_date_from_api > last_flag_date_from_db:
-                    self.send_message(member_id, member_name, activity_data)
+                    # Temporary store all messages that we will send. Later we will sort them.
+                    # This will allow us to create notification in order in which the flags were obtained
+                    self.message_queue["{}_{}".format(last_flag_date_from_api.timestamp(), member_id)] = {
+                        "member_id": member_id,
+                        "member_name": member_name,
+                        "activity_data": activity_data
+                    }
 
             self.db.update(
                 "htb_team_members",
@@ -155,12 +176,13 @@ class PWNgress():
                 "id = '{}'".format(member_id)
             )
 
-    def get_user_activities(self, user_id):
+    def get_user_activities(self, member_name, user_id):
         """
         Get user activities.
         """
 
-        self.log.info("Checking user activities")
+        self.log.info("Checking user activities {} ({})".format(member_name, user_id))
+
         try:
             team_activity_link = "https://www.hackthebox.com" \
                                  "/api/v4/user/profile/activity/{}".format(user_id)
@@ -174,7 +196,7 @@ class PWNgress():
             r = requests.get(team_activity_link, headers=headers)
             user_activities = json.loads(r.text)
 
-            self.log.debug("Found {} activities".format(len(user_activities["profile"]["activity"])))
+            # self.log.debug("Found {} activities".format(len(user_activities["profile"]["activity"])))
 
             return user_activities
         except Exception as err:
@@ -188,7 +210,6 @@ class PWNgress():
         htb_flag_type - parameters is URL of the machine or type of the challenge.
         """
 
-        # TODO: Move font names to settings file?
         # Size of notification image
         width = 500
         height = 110
@@ -260,20 +281,24 @@ class PWNgress():
         # If username is too big, we decrease the font size until it fits between avatar and flag images
         font_htb_name_size = 32
         while True:
-            font_htb_name = ImageFont.truetype("../images/NoizeSport.ttf", size=font_htb_name_size, layout_engine=0)
-            if font_htb_name.getsize(htb_name)[0] < 300:
-                x_pos = width // 2 - font_htb_name.getsize(htb_name)[0] // 2 + 5
+            font_htb_name = ImageFont.truetype(
+                "../images/" + self.font_htb_name,
+                size=font_htb_name_size,
+                layout_engine=0
+            )
+            if font_htb_name.getlength(htb_name) < 300:
+                x_pos = width // 2 - font_htb_name.getlength(htb_name) // 2 + 5
                 image_editable.text((x_pos, margin_size), htb_name, fill=white_color, font=font_htb_name)
                 break
             else:
                 font_htb_name_size -= 1
 
-        font_message = ImageFont.truetype("../images/Fixedsys.ttf", size=18, layout_engine=0)
+        font_message = ImageFont.truetype("../images/" + self.font_message, size=18, layout_engine=0)
         if message[1] == "ROOT " or message[1] == "USER ":
             # Machine message
-            x_pos_1 = width // 2 - font_message.getsize("".join(message))[0] // 2 + 5
-            x_pos_2 = x_pos_1 + font_message.getsize(message[0])[0]
-            x_pos_3 = x_pos_2 + font_message.getsize(message[1])[0]
+            x_pos_1 = width // 2 - font_message.getlength("".join(message)) // 2 + 5
+            x_pos_2 = x_pos_1 + font_message.getlength(message[0])
+            x_pos_3 = x_pos_2 + font_message.getlength(message[1])
 
             image_editable.text((x_pos_1, 70), message[0], fill=white_color, font=font_message)
             if message[1] == "ROOT ":
@@ -283,9 +308,9 @@ class PWNgress():
             image_editable.text((x_pos_3, 70), message[2], fill=white_color, font=font_message)
         else:
             # Challenge, endgame or fortress message
-            x_pos_1 = width // 2 - font_message.getsize("".join([message[0], message[1]]))[0] // 2 + 5
-            x_pos_2 = x_pos_1 + font_message.getsize("".join(message[0]))[0]
-            x_pos_3 = width // 2 - font_message.getsize(message[2])[0] // 2 + 5
+            x_pos_1 = width // 2 - font_message.getlength("".join([message[0], message[1]])) // 2 + 5
+            x_pos_2 = x_pos_1 + font_message.getlength("".join(message[0]))
+            x_pos_3 = width // 2 - font_message.getlength(message[2]) // 2 + 5
 
             # Shorten name of the long flags
             if len(message[0]) > 30:
@@ -306,12 +331,32 @@ class PWNgress():
 
         return notification_filename
 
+    def send_messages(self):
+        """
+        Sort saved messages and send them.
+        """
+
+        self.log.info("Message queue - " + str(len(self.message_queue)))
+
+        if self.message_queue:
+            sorted_message_queue = OrderedDict(sorted(self.message_queue.items()))
+            for _, message_data in sorted_message_queue.items():
+                self.send_message(
+                    message_data["member_id"],
+                    message_data["member_name"],
+                    message_data["activity_data"]
+                )
+
+        # Always empty message queue
+        self.message_queue = {}
+
+
     def send_message(self, member_id, htb_name, activity_data):
         """
         Send message in Discord using Webhook.
         """
 
-        self.log.info("Send message")
+        self.log.info("        Sending message for user {} ({})".format(htb_name, member_id))
 
         htb_user_avatar_url = self.db.select("htb_avatar", "htb_team_members", f"id = '{member_id}'")[0][0]
 
@@ -366,7 +411,8 @@ class PWNgress():
 
 def main():
     settings = read_settings_file("settings/PWNgress_settings.cfg")
-    PWNgress(settings["HTB_APP_TOKEN"], settings["HTB_TEAM_ID"], settings["DISCORD_WEBHOOK_URL"])
+    PWNgress(settings["HTB_APP_TOKEN"], settings["HTB_TEAM_ID"], settings["DISCORD_WEBHOOK_URL"],
+             settings["FONT_HTB_NAME"], settings["FONT_MESSAGE"])
 
 
 if __name__ == "__main__":
