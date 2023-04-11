@@ -19,8 +19,8 @@ class PWNgress():
     PWNgress.
     """
 
-    def __init__(self, htb_app_token, htb_team_id, discord_webhook_url, font_htb_name, font_message):
-        # TODO: Add README
+    def __init__(self, htb_app_token, htb_team_id, discord_webhook_url, font_htb_name, font_message,
+                 htb_users_to_ignore):
         self.log = Lumberjack("../logs/PWNgress_events.log", True)
 
         self.db = SQLWizard("../database/PWNgress.sqlite")
@@ -32,6 +32,7 @@ class PWNgress():
         self.discord_webhook_url = discord_webhook_url
         self.font_htb_name = font_htb_name
         self.font_message = font_message
+        self.htb_users_to_ignore = htb_users_to_ignore.split(",")
 
         self.message_queue = {}
 
@@ -43,10 +44,27 @@ class PWNgress():
         Core part of the script. Currently, only tracking team activities is implemented.
         """
 
+        check = []
         while True:
-            self.get_and_save_team_members()
-            self.check_each_team_member_solves()
-            self.send_messages()
+            # self.get_and_save_team_members()
+            # self.check_each_team_member_solves()
+            # self.send_member_solves_messages()
+
+            self.log.debug(datetime.now().time().strftime("%H:%M"))
+
+            if datetime.now().time().strftime("%H:%M") == '19:59' or\
+                datetime.now().time().strftime("%H:%M") == '20:00' or\
+                datetime.now().time().strftime("%H:%M") == '20:01':
+
+                if "20" not in check:
+                    self.get_and_save_team_members()
+                    self.check_each_team_member_solves()
+                    self.log.warning(datetime.now().time().strftime("%H:%M"))
+
+                    self.get_team_ranking()
+                    self.get_members_ranking()
+                    self.send_ranking_message()
+                    check.append("20")
 
             time.sleep(delay)
 
@@ -67,8 +85,8 @@ class PWNgress():
                               "Gecko/20100101 Firefox/111.0"
             }
 
-            r = requests.get(team_members_link, headers=headers)
-            team_members_json_data = json.loads(r.text)
+            req = requests.get(team_members_link, headers=headers)
+            team_members_json_data = json.loads(req.text)
         except Exception as err:
             self.log.error("Failed to get team members " + str(err))
             return
@@ -78,9 +96,14 @@ class PWNgress():
         # with open("test/test_team_members.json", "r") as f:
         #     team_members_json_data = json.load(f)
 
+        all_member_ids = [x[0] for x in self.db.select("id", "htb_team_members")]
+        # TODO: remove inactive users
         for member_data in team_members_json_data:
+            # Ignore inactive users
+            if str(member_data["id"]) == self.htb_users_to_ignore:
+                continue
             # Check if the team member is already in the database
-            if self.db.select("id", "htb_team_members", "id = '{}'".format(member_data["id"])):
+            if member_data["id"] in all_member_ids:
                 self.log.debug("Team member {} ({}) already in the database".format(
                     member_data["name"],
                     member_data["id"]
@@ -153,10 +176,11 @@ class PWNgress():
                 )
                 continue
 
+            # Check if new activity
+            date_format = "%Y-%m-%dT%H:%M:%S.%fZ"
+            last_flag_date_from_db = datetime.strptime(member_last_flag_date, date_format)
+
             for activity_data in reversed(member_solves_json["profile"]["activity"]):
-                # Compare dates and send flag if newer
-                date_format = "%Y-%m-%dT%H:%M:%S.%fZ"
-                last_flag_date_from_db = datetime.strptime(member_last_flag_date, date_format)
                 last_flag_date_from_api = datetime.strptime(activity_data["date"], date_format)
 
                 if last_flag_date_from_api > last_flag_date_from_db:
@@ -193,8 +217,8 @@ class PWNgress():
                               "Gecko/20100101 Firefox/111.0"
             }
 
-            r = requests.get(team_activity_link, headers=headers)
-            user_activities = json.loads(r.text)
+            req = requests.get(team_activity_link, headers=headers)
+            user_activities = json.loads(req.text)
 
             # self.log.debug("Found {} activities".format(len(user_activities["profile"]["activity"])))
 
@@ -202,6 +226,247 @@ class PWNgress():
         except Exception as err:
             self.log.error("Failed to get member activities " + str(err))
             return ""
+
+    def get_team_ranking(self):
+        """
+        """
+
+        self.log.info("Getting new team ranking")
+
+        try:
+            team_info_link = "https://www.hackthebox.com" \
+                             "/api/v4/team/info/{}".format(self.htb_team_id)
+            team_stats_link = "https://www.hackthebox.com" \
+                              "/api/v4/team/stats/owns/{}".format(self.htb_team_id)
+
+            headers = {
+                "Authorization": "Bearer " + self.htb_app_token,
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0)"
+                              "Gecko/20100101 Firefox/111.0"
+            }
+
+            req = requests.get(team_info_link, headers=headers)
+            team_info_data = json.loads(req.text)
+
+            req = requests.get(team_stats_link, headers=headers)
+            team_stats_data = json.loads(req.text)
+        except Exception as err:
+            self.log.error("Failed to get team ranking data " + str(err))
+            return
+
+        rank_date = datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        self.db.insert(
+            "team_ranking",
+            OrderedDict([
+                ("rank_date", rank_date),
+                ("rank", team_stats_data["rank"]),
+                ("points", team_info_data["points"]),
+                ("user_owns", team_stats_data["user_owns"]),
+                ("system_owns", team_stats_data["system_owns"]),
+                ("challenge_owns", team_stats_data["challenge_owns"]),
+                ("respects", team_stats_data["respects"])
+            ])
+        )
+
+    def get_members_ranking(self):
+        """
+        """
+
+        self.log.info("Getting new team members ranking")
+
+        # Get all team members from the database
+        found_member_rows = self.db.select("id, htb_name, rank, points, last_flag_date", "htb_team_members")
+        for found_member_row in found_member_rows:
+            member_id = found_member_row[0]
+            member_name = found_member_row[1]
+            member_rank = found_member_row[2]
+            member_points = found_member_row[3]
+            member_last_flag_date = found_member_row[4]
+
+            self.log.info("Getting member ranking data for user {} ({})".format(member_name, member_id))
+
+            try:
+                member_basic_link = "https://www.hackthebox.com" \
+                                    "/api/v4/user/profile/basic/{}".format(member_id)
+                member_challenges_link = "https://www.hackthebox.com" \
+                                         "/api/v4/user/profile/progress/challenges/{}".format(member_id)
+                member_fortress_link = "https://www.hackthebox.com" \
+                                       "/api/v4/user/profile/progress/fortress/{}".format(member_id)
+                member_endgame_link = "https://www.hackthebox.com" \
+                                      "/api/v4/user/profile/progress/endgame/{}".format(member_id)
+                member_prolab_link = "https://www.hackthebox.com" \
+                                      "/api/v4/user/profile/progress/prolab/{}".format(member_id)
+                headers = {
+                    "Authorization": "Bearer " + self.htb_app_token,
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0)"
+                                "Gecko/20100101 Firefox/111.0"
+                }
+
+                req = requests.get(member_basic_link, headers=headers)
+                member_basic_data = json.loads(req.text)
+
+                req = requests.get(member_challenges_link, headers=headers)
+                member_challenges_data = json.loads(req.text)
+
+                req = requests.get(member_fortress_link, headers=headers)
+                member_fortress_data = json.loads(req.text)
+
+                req = requests.get(member_endgame_link, headers=headers)
+                member_endgame_data = json.loads(req.text)
+
+                req = requests.get(member_prolab_link, headers=headers)
+                member_prolab_data = json.loads(req.text)
+
+            except Exception as err:
+                self.log.error("Failed to get team ranking data " + str(err))
+                return
+
+            fortress_count = 0
+            for member_fortress in member_fortress_data["profile"]["fortresses"]:
+                fortress_count += member_fortress["owned_flags"]
+
+            endgame_count = 0
+            for member_fortress in member_endgame_data["profile"]["endgames"]:
+                endgame_count += member_fortress["owned_flags"]
+
+            prolab_count = 0
+            for member_fortress in member_prolab_data["profile"]["prolabs"]:
+                prolab_count += member_fortress["owned_flags"]
+
+            rank_date = datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+            self.db.insert(
+                "member_ranking",
+                OrderedDict([
+                    ("id", member_id),
+                    ("rank_date", rank_date),
+                    ("htb_name", member_name),
+                    ("rank", member_rank),
+                    ("points", member_points),
+                    ("user_owns", member_basic_data["profile"]["user_owns"]),
+                    ("system_owns", member_basic_data["profile"]["system_owns"]),
+                    ("challenge_owns", member_challenges_data["profile"]["challenge_owns"]["solved"]),
+                    ("fortress_owns", fortress_count),
+                    ("endgame_owns", endgame_count),
+                    ("prolabs_owns", prolab_count),
+                    ("user_bloods", member_basic_data["profile"]["user_bloods"]),
+                    ("system_bloods", member_basic_data["profile"]["system_bloods"]),
+                    ("last_flag_date", member_last_flag_date),
+                    ("respects", member_basic_data["profile"]["respects"])
+                ])
+            )
+
+
+    def send_ranking_message(self):
+        """
+        """
+
+        self.log.info("Sending ranking message")
+
+        # TODO: add order and limit to SQLWizard
+        last_two_ranking_data = self.db.select(
+            "*",
+            "team_ranking",
+            "rank > 0 ORDER BY rank_date DESC LIMIT 2"
+        )
+
+        diff_rank = last_two_ranking_data[0][1] - last_two_ranking_data[1][1]
+        diff_points = last_two_ranking_data[0][2] - last_two_ranking_data[1][2]
+        diff_user_owns = last_two_ranking_data[0][3] - last_two_ranking_data[1][3]
+        diff_system_owns = last_two_ranking_data[0][4] - last_two_ranking_data[1][4]
+        diff_challenge_owns = last_two_ranking_data[0][5] - last_two_ranking_data[1][5]
+        diff_respects = last_two_ranking_data[0][6] - last_two_ranking_data[1][6]
+        team_message = "```plaintext\n"
+        team_message += "+-----------------------------------------------------------------------------------------------------+\n"
+        team_message += "|                                            TEAM RANKING                                             |\n"
+        team_message += "+----------------+----------------+----------------+----------------+----------------+----------------+\n"
+        team_message += "|      RANK      |     POINTS     |   USERS OWNS   |   SYSTEM OWNS  | CHALLENGE OWNS |    RESPECTS    |\n"
+        team_message += "+----------------+----------------+----------------+----------------+----------------+----------------+\n"
+
+        team_message += "|{:>16s}|{:>16s}|{:>16s}|{:>16s}|{:>16s}|{:>16s}|\n".format(
+            "{} ({})".format(last_two_ranking_data[0][1], diff_rank),
+            "{} ({})".format(last_two_ranking_data[0][2], diff_points),
+            "{} ({})".format(last_two_ranking_data[0][3], diff_user_owns),
+            "{} ({})".format(last_two_ranking_data[0][4], diff_system_owns),
+            "{} ({})".format(last_two_ranking_data[0][5], diff_challenge_owns),
+            "{} ({})".format(last_two_ranking_data[0][6], diff_respects)
+        )
+        team_message += "+-----------------------------------------------------------------------------------------------------+\n"
+        team_message += "```\n"
+
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0)"
+                          "Gecko/20100101 Firefox/111.0",
+            "Content-Type": "application/json"
+        }
+
+        message_data = {
+            "content": team_message
+        }
+        try:
+            req = requests.post(self.discord_webhook_url, headers=headers, json=message_data)
+        except Exception as err:
+            self.log.error("Failed to send Discord message")
+            self.log.error(traceback.print_exc())
+
+        # member_message = "```plaintext\n"
+        member_message = ""
+        member_message += "+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+\n"
+        member_message += "|                                                                                                    MEMBER RANKING                                                                                                   |\n"
+        member_message += "+--------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+-----------+\n"
+        member_message += "|     NAME     |      RANK      |     POINTS     |      USER      |     SYSTEM     |   CHALLENGES   |    FORTRESS    |     ENDGAME    |     PROLABS    |    U BLOODS    |    S BLOODS    |    RESPECTS    | LAST FLAG |\n"
+        member_message += "+--------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+----------------+-----------+\n"
+        # Get all team members from the database
+        found_member_rows = self.db.select("id", "htb_team_members", "id > 0 ORDER by rank ASC")
+        for found_member_row in found_member_rows:
+            member_id = found_member_row[0]
+            last_two_ranking_data = self.db.select(
+                "*",
+                "member_ranking",
+                "id = {} ORDER BY rank_date DESC LIMIT 2".format(member_id)
+            )
+
+            diff_rank = last_two_ranking_data[0][3] - last_two_ranking_data[1][3]
+            diff_points = last_two_ranking_data[0][4] - last_two_ranking_data[1][4]
+            diff_user_owns = last_two_ranking_data[0][5] - last_two_ranking_data[1][5]
+            diff_system_owns = last_two_ranking_data[0][6] - last_two_ranking_data[1][6]
+            diff_challenge_owns = last_two_ranking_data[0][7] - last_two_ranking_data[1][7]
+            diff_fortress_owns = last_two_ranking_data[0][8] - last_two_ranking_data[1][8]
+            diff_endgame_owns = last_two_ranking_data[0][9] - last_two_ranking_data[1][9]
+            diff_prolab_owns = last_two_ranking_data[0][10] - last_two_ranking_data[1][10]
+            diff_user_bloods = last_two_ranking_data[0][11] - last_two_ranking_data[1][11]
+            diff_system_bloods = last_two_ranking_data[0][12] - last_two_ranking_data[1][12]
+            diff_respects = last_two_ranking_data[0][14] - last_two_ranking_data[1][14]
+
+            member_message += "|{:14s}|{:>16s}|{:>16s}|{:>16s}|{:>16s}|{:>16s}|{:>16s}|{:>16s}|{:>16s}|{:>16s}|{:>16s}|{:>16s}|{:11s}|\n".format(
+                last_two_ranking_data[0][2],
+                "{} ({})".format(last_two_ranking_data[0][3], diff_rank),
+                "{} ({})".format(last_two_ranking_data[0][4], diff_points),
+                "{} ({})".format(last_two_ranking_data[0][5], diff_user_owns),
+                "{} ({})".format(last_two_ranking_data[0][6], diff_system_owns),
+                "{} ({})".format(last_two_ranking_data[0][7], diff_challenge_owns),
+                "{} ({})".format(last_two_ranking_data[0][8], diff_fortress_owns),
+                "{} ({})".format(last_two_ranking_data[0][9], diff_endgame_owns),
+                "{} ({})".format(last_two_ranking_data[0][10], diff_prolab_owns),
+                "{} ({})".format(last_two_ranking_data[0][12], diff_user_bloods),
+                "{} ({})".format(last_two_ranking_data[0][12], diff_system_bloods),
+                "{} ({})".format(last_two_ranking_data[0][14], diff_respects),
+                datetime.strftime(datetime.strptime(last_two_ranking_data[0][13], "%Y-%m-%dT%H:%M:%S.%fZ"), "%Y-%m-%d")
+            )
+
+        member_message += "+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+\n"
+
+        message_filename = "/tmp/message.txt"
+        with open(message_filename, "w") as out_file:
+            out_file.write(member_message)
+        image_file = {
+            "PWN": open(message_filename, "rb")
+        }
+
+        try:
+            req = requests.post(self.discord_webhook_url, files=image_file)
+        except Exception as err:
+            self.log.error("Failed to send Discord message")
+            self.log.error(traceback.print_exc())
 
     def create_image(self, htb_name, htb_user_avatar_url, htb_flag_type, message):
         """
@@ -224,7 +489,7 @@ class PWNgress():
         background_color = (43, 45, 49)
         white_color = (255, 255, 255)
         red_color = (255, 0, 0)
-        green_color = (0, 255, 0)
+        green_color = (134, 190, 60)
         endgame_color = (0, 134, 255)
         fortress_color = (148, 0, 255)
         challenge_color = (159, 239, 0)
@@ -331,7 +596,7 @@ class PWNgress():
 
         return notification_filename
 
-    def send_messages(self):
+    def send_member_solves_messages(self):
         """
         Sort saved messages and send them.
         """
@@ -403,7 +668,7 @@ class PWNgress():
             }
 
             try:
-                r = requests.post(self.discord_webhook_url, files=image_file)
+                req = requests.post(self.discord_webhook_url, files=image_file)
             except Exception as err:
                 self.log.error("Failed to send Discord message")
                 self.log.error(traceback.print_exc())
@@ -412,7 +677,7 @@ class PWNgress():
 def main():
     settings = read_settings_file("settings/PWNgress_settings.cfg")
     PWNgress(settings["HTB_APP_TOKEN"], settings["HTB_TEAM_ID"], settings["DISCORD_WEBHOOK_URL"],
-             settings["FONT_HTB_NAME"], settings["FONT_MESSAGE"])
+             settings["FONT_HTB_NAME"], settings["FONT_MESSAGE"], settings["HTB_USERS_TO_IGNORE"])
 
 
 if __name__ == "__main__":

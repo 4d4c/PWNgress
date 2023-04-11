@@ -13,21 +13,26 @@ CREATE TABLE IF NOT EXISTS team_ranking (
     rank_date TEXT,
     rank INT,
     points INT,
-    user_count INT,
-    root_count INT,
-    challenge_count INT,
-    respect_count INT
+    user_owns INT,
+    system_owns INT,
+    challenge_owns INT,
+    respects INT
 );
 
 CREATE TABLE IF NOT EXISTS member_ranking (
-    rank_date TEXT,
     id INT,
-    user_count INT,
-    root_count INT,
-    machine_count INT,
-    challenge_count INT,
-    fortress_count INT,
-    endgame_count INT,
-    prolabs_count INT,
-    respect_count INT
+    rank_date TEXT,
+    htb_name TEXT,
+    rank INT,
+    points INT,
+    user_owns INT,
+    system_owns INT,
+    challenge_owns INT,
+    fortress_owns INT,
+    endgame_owns INT,
+    prolabs_owns INT,
+    user_bloods INT,
+    system_bloods INT,
+    last_flag_date INT,
+    respects INT
 );
