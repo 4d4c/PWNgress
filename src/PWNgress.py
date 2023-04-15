@@ -104,7 +104,11 @@ class PWNgress():
 
         for member_data in team_members_json_data:
             # Ignore inactive users
-            if str(member_data["id"]) == self.htb_users_to_ignore:
+            if str(member_data["id"]) in self.htb_users_to_ignore:
+                self.log.warning("Ignoring user {} ({})".format(
+                    member_data["name"],
+                    member_data["id"]
+                ))
                 continue
             # Check if the team member is already in the database
             if member_data["id"] in all_member_ids:
@@ -526,21 +530,18 @@ class PWNgress():
                 # Header font
                 if i == 0:
                     font = ImageFont.truetype(self.font_table_header, size=26, layout_engine=0)
-                    row_max_hei[i] = max(font.getsize(table_data[i][j])[1] + 5, row_max_hei[i])
+                    row_max_hei[i] = max(round(font.getbbox(table_data[i][j])[3]) + 5, row_max_hei[i])
                 else:
                     if j == 0:
                         # Names font
                         font = ImageFont.truetype(self.font_table_names, size=28, layout_engine=0)
-                        if i == 0:
-                            col_max_wid[j] = max(font.getsize(table_data[i][j])[0], col_max_wid[j])
-                        else:
-                            # Add spacing to data cell to add up/down arrows if needed
-                            col_max_wid[j] = max(font.getsize(table_data[i][j])[0] + 33, col_max_wid[j])
+                        # Add spacing to data cell to add up/down arrows if needed
+                        col_max_wid[j] = max(round(font.getlength(table_data[i][j])) + 33, col_max_wid[j])
                     else:
                         # Data font
                         font = ImageFont.truetype(self.font_table_data, size=22, layout_engine=0)
-                        col_max_wid[j] = max(font.getsize(table_data[i][j])[0] + 30, col_max_wid[j])
-                    row_max_hei[i] = max(font.getsize(table_data[i][j])[1], row_max_hei[i])
+                        col_max_wid[j] = max(round(font.getlength(table_data[i][j])) + 30, col_max_wid[j])
+                    row_max_hei[i] = max(round(font.getbbox(table_data[i][j])[3]), row_max_hei[i])
 
         tab_width = sum(col_max_wid) + len(col_max_wid) * 2 * margin
         tab_heigh = sum(row_max_hei) + len(row_max_hei) * 2 * margin
@@ -604,9 +605,9 @@ class PWNgress():
                         color = colors["green"]
                 _left = left
                 if i == 0:
-                    _left += (col_max_wid[j] - font.getsize(table_data[i][j])[0]) // 2
+                    _left += (col_max_wid[j] - round(font.getlength(table_data[i][j]))) // 2
                 elif i != 0 and j != 0:
-                    _left += col_max_wid[j] - font.getsize(table_data[i][j])[0]
+                    _left += col_max_wid[j] - round(font.getlength(table_data[i][j]))
                 if j == 0:
                     if i == 0:
                         draw.text((_left, top), table_data[i][j], font=font, fill=color)
