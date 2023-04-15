@@ -321,7 +321,7 @@ class PWNgress():
                 member_prolab_data = json.loads(req.text)
 
             except Exception as err:
-                self.log.error("Failed to get team ranking data " + str(err))
+                self.log.error("Failed to get member ranking data " + str(err))
                 return
 
             fortress_count = 0
