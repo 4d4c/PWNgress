@@ -19,8 +19,8 @@ class PWNgress():
     PWNgress.
     """
 
-    def __init__(self, htb_app_token, htb_team_id, discord_webhook_url, font_htb_name, font_message):
-        # TODO: Add README
+    def __init__(self, htb_app_token, htb_team_id, discord_webhook_url, font_htb_name, font_message,
+                 htb_users_to_ignore, font_table_header, font_table_names, font_table_data):
         self.log = Lumberjack("../logs/PWNgress_events.log", True)
 
         self.db = SQLWizard("../database/PWNgress.sqlite")
@@ -32,6 +32,10 @@ class PWNgress():
         self.discord_webhook_url = discord_webhook_url
         self.font_htb_name = font_htb_name
         self.font_message = font_message
+        self.htb_users_to_ignore = htb_users_to_ignore.split(",")
+        self.font_table_header = font_table_header
+        self.font_table_names = font_table_names
+        self.font_table_data = font_table_data
 
         self.message_queue = {}
 
@@ -43,10 +47,27 @@ class PWNgress():
         Core part of the script. Currently, only tracking team activities is implemented.
         """
 
+        last_rank_check_date = ""
         while True:
             self.get_and_save_team_members()
             self.check_each_team_member_solves()
-            self.send_messages()
+            self.send_member_solves_messages()
+
+            # Only run once a week at 19:00 UTC
+            if datetime.today().weekday() == 6:
+                # Double check in case our previous tasks takes longer than a minute
+                if datetime.now().time().strftime("%H:%M") == "19:00" or\
+                   datetime.now().time().strftime("%H:%M") == "19:01":
+
+                    current_date = datetime.now().strftime("%Y-%m-%d")
+                    self.log.debug("Starting ranking check")
+                    self.log.debug("    Current date   : {}".format(current_date))
+                    self.log.debug("    Last check date: {}".format(last_rank_check_date))
+                    if current_date != last_rank_check_date:
+                        self.get_team_ranking()
+                        self.get_members_ranking()
+                        self.send_ranking_message()
+                        last_rank_check_date = current_date
 
             time.sleep(delay)
 
@@ -67,8 +88,8 @@ class PWNgress():
                               "Gecko/20100101 Firefox/111.0"
             }
 
-            r = requests.get(team_members_link, headers=headers)
-            team_members_json_data = json.loads(r.text)
+            req = requests.get(team_members_link, headers=headers)
+            team_members_json_data = json.loads(req.text)
         except Exception as err:
             self.log.error("Failed to get team members " + str(err))
             return
@@ -78,9 +99,14 @@ class PWNgress():
         # with open("test/test_team_members.json", "r") as f:
         #     team_members_json_data = json.load(f)
 
+        all_member_ids = [x[0] for x in self.db.select("id", "htb_team_members")]
+        # TODO: remove inactive users
         for member_data in team_members_json_data:
+            # Ignore inactive users
+            if str(member_data["id"]) == self.htb_users_to_ignore:
+                continue
             # Check if the team member is already in the database
-            if self.db.select("id", "htb_team_members", "id = '{}'".format(member_data["id"])):
+            if member_data["id"] in all_member_ids:
                 self.log.debug("Team member {} ({}) already in the database".format(
                     member_data["name"],
                     member_data["id"]
@@ -153,10 +179,11 @@ class PWNgress():
                 )
                 continue
 
+            # Check if new activity
+            date_format = "%Y-%m-%dT%H:%M:%S.%fZ"
+            last_flag_date_from_db = datetime.strptime(member_last_flag_date, date_format)
+
             for activity_data in reversed(member_solves_json["profile"]["activity"]):
-                # Compare dates and send flag if newer
-                date_format = "%Y-%m-%dT%H:%M:%S.%fZ"
-                last_flag_date_from_db = datetime.strptime(member_last_flag_date, date_format)
                 last_flag_date_from_api = datetime.strptime(activity_data["date"], date_format)
 
                 if last_flag_date_from_api > last_flag_date_from_db:
@@ -193,8 +220,8 @@ class PWNgress():
                               "Gecko/20100101 Firefox/111.0"
             }
 
-            r = requests.get(team_activity_link, headers=headers)
-            user_activities = json.loads(r.text)
+            req = requests.get(team_activity_link, headers=headers)
+            user_activities = json.loads(req.text)
 
             # self.log.debug("Found {} activities".format(len(user_activities["profile"]["activity"])))
 
@@ -202,6 +229,437 @@ class PWNgress():
         except Exception as err:
             self.log.error("Failed to get member activities " + str(err))
             return ""
+
+    def get_team_ranking(self):
+        """
+        """
+
+        self.log.info("Getting team ranking")
+
+        try:
+            team_info_link = "https://www.hackthebox.com" \
+                             "/api/v4/team/info/{}".format(self.htb_team_id)
+            team_stats_link = "https://www.hackthebox.com" \
+                              "/api/v4/team/stats/owns/{}".format(self.htb_team_id)
+
+            headers = {
+                "Authorization": "Bearer " + self.htb_app_token,
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0)"
+                              "Gecko/20100101 Firefox/111.0"
+            }
+
+            req = requests.get(team_info_link, headers=headers)
+            team_info_data = json.loads(req.text)
+
+            req = requests.get(team_stats_link, headers=headers)
+            team_stats_data = json.loads(req.text)
+        except Exception as err:
+            self.log.error("Failed to get team ranking data " + str(err))
+            return
+
+        rank_date = datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        self.db.insert(
+            "team_ranking",
+            OrderedDict([
+                ("rank_date", rank_date),
+                ("rank", team_stats_data["rank"]),
+                ("points", team_info_data["points"]),
+                ("user_owns", team_stats_data["user_owns"]),
+                ("system_owns", team_stats_data["system_owns"]),
+                ("challenge_owns", team_stats_data["challenge_owns"]),
+                ("respects", team_stats_data["respects"])
+            ])
+        )
+
+    def get_members_ranking(self):
+        """
+        """
+
+        self.log.info("Getting members ranking")
+
+        # Get all team members from the database
+        found_member_rows = self.db.select("id, htb_name, rank, points, last_flag_date", "htb_team_members")
+        for found_member_row in found_member_rows:
+            member_id = found_member_row[0]
+            member_name = found_member_row[1]
+            member_rank = found_member_row[2]
+            member_points = found_member_row[3]
+            member_last_flag_date = found_member_row[4]
+
+            self.log.info("Getting member ranking data for user {} ({})".format(member_name, member_id))
+
+            try:
+                member_basic_link = "https://www.hackthebox.com" \
+                                    "/api/v4/user/profile/basic/{}".format(member_id)
+                member_challenges_link = "https://www.hackthebox.com" \
+                                         "/api/v4/user/profile/progress/challenges/{}".format(member_id)
+                member_fortress_link = "https://www.hackthebox.com" \
+                                       "/api/v4/user/profile/progress/fortress/{}".format(member_id)
+                member_endgame_link = "https://www.hackthebox.com" \
+                                      "/api/v4/user/profile/progress/endgame/{}".format(member_id)
+                member_prolab_link = "https://www.hackthebox.com" \
+                                     "/api/v4/user/profile/progress/prolab/{}".format(member_id)
+                headers = {
+                    "Authorization": "Bearer " + self.htb_app_token,
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0)"
+                                  "Gecko/20100101 Firefox/111.0"
+                }
+
+                req = requests.get(member_basic_link, headers=headers)
+                member_basic_data = json.loads(req.text)
+
+                req = requests.get(member_challenges_link, headers=headers)
+                member_challenges_data = json.loads(req.text)
+
+                req = requests.get(member_fortress_link, headers=headers)
+                member_fortress_data = json.loads(req.text)
+
+                req = requests.get(member_endgame_link, headers=headers)
+                member_endgame_data = json.loads(req.text)
+
+                req = requests.get(member_prolab_link, headers=headers)
+                member_prolab_data = json.loads(req.text)
+
+            except Exception as err:
+                self.log.error("Failed to get member ranking data " + str(err))
+                return
+
+            fortress_count = 0
+            for member_fortress in member_fortress_data["profile"]["fortresses"]:
+                fortress_count += member_fortress["owned_flags"]
+
+            endgame_count = 0
+            for member_fortress in member_endgame_data["profile"]["endgames"]:
+                endgame_count += member_fortress["owned_flags"]
+
+            prolab_count = 0
+            for member_fortress in member_prolab_data["profile"]["prolabs"]:
+                prolab_count += member_fortress["owned_flags"]
+
+            rank_date = datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+            self.db.insert(
+                "member_ranking",
+                OrderedDict([
+                    ("id", member_id),
+                    ("rank_date", rank_date),
+                    ("htb_name", member_name),
+                    ("rank", member_rank),
+                    ("points", member_points),
+                    ("user_owns", member_basic_data["profile"]["user_owns"]),
+                    ("system_owns", member_basic_data["profile"]["system_owns"]),
+                    ("challenge_owns", member_challenges_data["profile"]["challenge_owns"]["solved"]),
+                    ("fortress_owns", fortress_count),
+                    ("endgame_owns", endgame_count),
+                    ("prolabs_owns", prolab_count),
+                    ("user_bloods", member_basic_data["profile"]["user_bloods"]),
+                    ("system_bloods", member_basic_data["profile"]["system_bloods"]),
+                    ("last_flag_date", member_last_flag_date),
+                    ("respects", member_basic_data["profile"]["respects"])
+                ])
+            )
+
+    def send_ranking_message(self):
+        """
+        """
+
+        self.log.info("Sending ranking message")
+
+        # last_two_ranking_data = self.db.select(
+        #     "*",
+        #     "team_ranking",
+        #     "rank > 0 ORDER BY rank_date DESC LIMIT 2"
+        # )
+
+        # diff_rank = last_two_ranking_data[0][1] - last_two_ranking_data[1][1]
+        # diff_points = last_two_ranking_data[0][2] - last_two_ranking_data[1][2]
+        # diff_user_owns = last_two_ranking_data[0][3] - last_two_ranking_data[1][3]
+        # diff_system_owns = last_two_ranking_data[0][4] - last_two_ranking_data[1][4]
+        # diff_challenge_owns = last_two_ranking_data[0][5] - last_two_ranking_data[1][5]
+        # diff_respects = last_two_ranking_data[0][6] - last_two_ranking_data[1][6]
+        # team_message = "```plaintext\n"
+        # team_message += "+-----------------------------------------------------------------------------------------------------+\n"
+        # team_message += "|                                            TEAM RANKING                                             |\n"
+        # team_message += "+----------------+----------------+----------------+----------------+----------------+----------------+\n"
+        # team_message += "|      RANK      |     POINTS     |   USERS OWNS   |   SYSTEM OWNS  | CHALLENGE OWNS |    RESPECTS    |\n"
+        # team_message += "+----------------+----------------+----------------+----------------+----------------+----------------+\n"
+
+        # team_message += "|{:>16s}|{:>16s}|{:>16s}|{:>16s}|{:>16s}|{:>16s}|\n".format(
+        #     "{} ({})".format(last_two_ranking_data[0][1], diff_rank),
+        #     "{} ({})".format(last_two_ranking_data[0][2], diff_points),
+        #     "{} ({})".format(last_two_ranking_data[0][3], diff_user_owns),
+        #     "{} ({})".format(last_two_ranking_data[0][4], diff_system_owns),
+        #     "{} ({})".format(last_two_ranking_data[0][5], diff_challenge_owns),
+        #     "{} ({})".format(last_two_ranking_data[0][6], diff_respects)
+        # )
+        # team_message += "+-----------------------------------------------------------------------------------------------------+\n"
+        # team_message += "```\n"
+
+        # headers = {
+        #     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0)"
+        #                   "Gecko/20100101 Firefox/111.0",
+        #     "Content-Type": "application/json"
+        # }
+
+        # message_data = {
+        #     "content": team_message
+        # }
+        # try:
+        #     req = requests.post(self.discord_webhook_url, headers=headers, json=message_data)
+        # except Exception as err:
+        #     self.log.error("Failed to send Discord message")
+        #     self.log.error(traceback.print_exc())
+
+        # Get 25 team members from the database. We limit it to 25 so ranking image doesn't get too big
+        found_member_rows = self.db.select(
+            "id",
+            "htb_team_members",
+            "id > 0 ORDER by rank ASC LIMIT 25"
+        )
+        # Get list of avatar links of the team members
+        avatar_links = [x[0] for x in self.db.select(
+            "htb_avatar",
+            "htb_team_members",
+            "id > 0 ORDER by rank ASC LIMIT 25"
+        )]
+        # Ranking table data. Start with headers
+        table_data = [["NAME", "RNK", "PNT", "USR", "SYS", "CHL", "FRT", "END", "PRO"]]
+        for found_member_row in found_member_rows:
+            member_id = found_member_row[0]
+            # Get two most recent rank rows for each member
+            last_two_ranking_data = self.db.select(
+                "*",
+                "member_ranking",
+                "id = {} ORDER BY rank_date DESC LIMIT 2".format(member_id)
+            )
+
+            last_two_ranking_data_first = last_two_ranking_data[0]
+            # If it's a new member we don't have previous weeks data. Add all user ranking as 0 (no changes)
+            if len(last_two_ranking_data) == 1:
+                last_two_ranking_data_second = last_two_ranking_data[0]
+            else:
+                last_two_ranking_data_second = last_two_ranking_data[1]
+            diff_rank = last_two_ranking_data_first[3] - last_two_ranking_data_second[3]
+            diff_points = last_two_ranking_data_first[4] - last_two_ranking_data_second[4]
+            diff_user_owns = last_two_ranking_data_first[5] - last_two_ranking_data_second[5]
+            diff_system_owns = last_two_ranking_data_first[6] - last_two_ranking_data_second[6]
+            diff_challenge_owns = last_two_ranking_data_first[7] - last_two_ranking_data_second[7]
+            diff_fortress_owns = last_two_ranking_data_first[8] - last_two_ranking_data_second[8]
+            diff_endgame_owns = last_two_ranking_data_first[9] - last_two_ranking_data_second[9]
+            diff_prolab_owns = last_two_ranking_data_first[10] - last_two_ranking_data_second[10]
+            # diff_user_bloods = last_two_ranking_data_first[11] - last_two_ranking_data_second[11]
+            # diff_system_bloods = last_two_ranking_data_first[12] - last_two_ranking_data_second[12]
+            # diff_respects = last_two_ranking_data_first[14] - last_two_ranking_data_second[14]
+
+            table_data.append([
+                last_two_ranking_data[0][2],
+                "{} ({:+d})".format(last_two_ranking_data_first[3], diff_rank).replace("(+0)", "(0)"),
+                "{} ({:+d})".format(last_two_ranking_data_first[4], diff_points).replace("(+0)", "(0)"),
+                "{} ({:+d})".format(last_two_ranking_data_first[5], diff_user_owns).replace("(+0)", "(0)"),
+                "{} ({:+d})".format(last_two_ranking_data_first[6], diff_system_owns).replace("(+0)", "(0)"),
+                "{} ({:+d})".format(last_two_ranking_data_first[7], diff_challenge_owns).replace("(+0)", "(0)"),
+                "{} ({:+d})".format(last_two_ranking_data_first[8], diff_fortress_owns).replace("(+0)", "(0)"),
+                "{} ({:+d})".format(last_two_ranking_data_first[9], diff_endgame_owns).replace("(+0)", "(0)"),
+                "{} ({:+d})".format(last_two_ranking_data_first[10], diff_prolab_owns).replace("(+0)", "(0)"),
+                # "{} ({:+d})".format(last_two_ranking_data_first[12], diff_user_bloods),
+                # "{} ({:+d})".format(last_two_ranking_data_first[12], diff_system_bloods),
+                # "{} ({:+d})".format(last_two_ranking_data_first[14], diff_respects),
+                # datetime.strftime(datetime.strptime(last_two_ranking_data_first[13], "%Y-%m-%dT%H:%M:%S.%fZ"), "%Y-%m-%d")
+            ])
+
+        table_filename = self.create_table_image(table_data, avatar_links)
+
+        image_file = {
+            "PWN": open(table_filename, "rb")
+        }
+
+        try:
+            req = requests.post(self.discord_webhook_url, files=image_file)
+        except Exception as err:
+            self.log.error("Failed to send Discord message")
+            self.log.error(traceback.print_exc())
+
+    def create_table_image(self, table_data, avatar_links):
+        """
+        Create ranking table image. Based on https://gist.github.com/xiaopc/324acb627e6f1f019ab60b0ec0e355aa
+        """
+
+        table_filename = "/tmp/PWNrank.png"
+        colors = {
+            "background": (43, 45, 49),
+            "header_background": (38, 38, 38),
+            "font": (159, 239, 0),
+            "line": (0, 0, 0),
+            "red": (245, 59, 60),
+            "green": (167, 253, 48),
+            "data": (240, 240, 240),
+            "names": (255, 255, 255),
+            "header_colors": [
+                (255, 255, 255),
+                (191, 147, 23),
+                (0, 176, 240),
+                (146, 208, 80),
+                (255, 0, 0),
+                (159, 239, 0),
+                (148, 0, 255),
+                (0, 134, 255),
+                (255, 192, 0)
+            ]
+        }
+        margin = 5
+
+        row_max_hei = [0] * len(table_data)
+        col_max_wid = [0] * len(max(table_data, key=len))
+
+        for i in range(len(table_data)):
+            for j in range(len(table_data[i])):
+                # Header font
+                if i == 0:
+                    font = ImageFont.truetype(self.font_table_header, size=26, layout_engine=0)
+                    row_max_hei[i] = max(font.getsize(table_data[i][j])[1] + 5, row_max_hei[i])
+                else:
+                    if j == 0:
+                        # Names font
+                        font = ImageFont.truetype(self.font_table_names, size=28, layout_engine=0)
+                        if i == 0:
+                            col_max_wid[j] = max(font.getsize(table_data[i][j])[0], col_max_wid[j])
+                        else:
+                            # Add spacing to data cell to add up/down arrows if needed
+                            col_max_wid[j] = max(font.getsize(table_data[i][j])[0] + 33, col_max_wid[j])
+                    else:
+                        # Data font
+                        font = ImageFont.truetype(self.font_table_data, size=22, layout_engine=0)
+                        col_max_wid[j] = max(font.getsize(table_data[i][j])[0] + 30, col_max_wid[j])
+                    row_max_hei[i] = max(font.getsize(table_data[i][j])[1], row_max_hei[i])
+
+        tab_width = sum(col_max_wid) + len(col_max_wid) * 2 * margin
+        tab_heigh = sum(row_max_hei) + len(row_max_hei) * 2 * margin
+
+        tab = Image.new(
+            "RGBA",
+            (tab_width + margin + margin, tab_heigh + margin + margin),
+            colors["background"]
+        )
+        draw = ImageDraw.Draw(tab)
+
+        draw.rectangle(
+            [(margin, margin), (margin + tab_width, margin + tab_heigh)],
+            fill=colors["background"],
+            width=0
+        )
+        draw.rectangle(
+            [
+                (margin, margin),
+                (margin + tab_width, margin + row_max_hei[0] + margin * 2)
+            ],
+            fill=colors["header_background"],
+            width=0
+        )
+
+        top = margin
+        for row_h in row_max_hei:
+            draw.line([(margin, top), (tab_width + margin, top)], fill=colors["line"])
+            top += row_h + margin * 2
+        draw.line([(margin, top), (tab_width + margin, top)], fill=colors["line"])
+
+        left = margin
+        for col_w in col_max_wid:
+            draw.line([(left, margin), (left, tab_heigh + margin)], fill=colors["line"])
+            left += col_w + margin * 2
+        draw.line([(left, margin), (left, tab_heigh + margin)], fill=colors["line"])
+
+        top, left = margin + margin, 0
+        for i in range(len(table_data)):
+            left = margin + margin
+            for j in range(len(table_data[i])):
+                if i == 0:
+                    color = colors["header_colors"][j]
+                    font = ImageFont.truetype(self.font_table_header, size=26, layout_engine=0)
+                else:
+                    if j == 0:
+                        font = ImageFont.truetype(self.font_table_names, size=28, layout_engine=0)
+                        color = colors["names"]
+                    else:
+                        font = ImageFont.truetype(self.font_table_data, size=22, layout_engine=0)
+                        color = colors["data"]
+                if "-" in table_data[i][j]:
+                    if j == 1:
+                        color = colors["green"]
+                    else:
+                        color = colors["red"]
+                elif "+" in table_data[i][j]:
+                    if j == 1:
+                        color = colors["red"]
+                    else:
+                        color = colors["green"]
+                _left = left
+                if i == 0:
+                    _left += (col_max_wid[j] - font.getsize(table_data[i][j])[0]) // 2
+                elif i != 0 and j != 0:
+                    _left += col_max_wid[j] - font.getsize(table_data[i][j])[0]
+                if j == 0:
+                    if i == 0:
+                        draw.text((_left, top), table_data[i][j], font=font, fill=color)
+                    else:
+                        draw.text((_left + 33, top-3), table_data[i][j], font=font, fill=color)
+                else:
+                    if i == 0:
+                        draw.text((_left, top), table_data[i][j], font=font, fill=color)
+                    else:
+                        if "-" in table_data[i][j]:
+                            if j == 1:
+                                with open("../images/arrow_up.png", "rb") as f:
+                                    arrow_image = Image.open(io.BytesIO(f.read()))
+                            else:
+                                with open("../images/arrow_down.png", "rb") as f:
+                                    arrow_image = Image.open(io.BytesIO(f.read()))
+                            new_arrow_image = Image.new("RGBA", arrow_image.size, colors["background"])
+                            new_arrow_image.paste(arrow_image, (0, 0), arrow_image)
+                            new_arrow_image.thumbnail((25, 25))
+                            tab.paste(new_arrow_image, (_left - 28, top - 1))
+                        elif "+" in table_data[i][j]:
+                            if j == 1:
+                                with open("../images/arrow_down.png", "rb") as f:
+                                    arrow_image = Image.open(io.BytesIO(f.read()))
+                            else:
+                                with open("../images/arrow_up.png", "rb") as f:
+                                    arrow_image = Image.open(io.BytesIO(f.read()))
+                            new_arrow_image = Image.new("RGBA", arrow_image.size, colors["background"])
+                            new_arrow_image.paste(arrow_image, (0, 0), arrow_image)
+                            new_arrow_image.thumbnail((25, 25))
+                            tab.paste(new_arrow_image, (_left - 28, top - 1))
+                        draw.text((_left, top), table_data[i][j], font=font, fill=color)
+                left += col_max_wid[j] + margin * 2
+            top += row_max_hei[i] + margin * 2
+
+        # HTTP headers for image downloading
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0)"
+                          "Gecko/20100101 Firefox/111.0"
+        }
+        indent = 0
+
+        for avatar_link in avatar_links:
+            # Download HTB user image
+            try:
+                req = requests.get(avatar_link, headers=headers)
+            except Exception as err:
+                self.log.error("Failed to get member image " + str(err))
+
+            htb_avatar_image = Image.open(io.BytesIO(req.content))
+
+            # filename = avatar_link.split("/")[-1:][0]
+            # with open("/tmp/" + filename, "rb") as f:
+            #     htb_avatar_image = Image.open(io.BytesIO(f.read()))
+            #     f.write(req.content)
+
+            htb_avatar_image.thumbnail((25, 25))
+            tab.paste(htb_avatar_image, (10, 49 + indent))
+            indent += 31
+
+        # tab.show()
+        tab.save(table_filename)
+
+        return table_filename
 
     def create_image(self, htb_name, htb_user_avatar_url, htb_flag_type, message):
         """
@@ -224,7 +682,7 @@ class PWNgress():
         background_color = (43, 45, 49)
         white_color = (255, 255, 255)
         red_color = (255, 0, 0)
-        green_color = (0, 255, 0)
+        green_color = (134, 190, 60)
         endgame_color = (0, 134, 255)
         fortress_color = (148, 0, 255)
         challenge_color = (159, 239, 0)
@@ -269,7 +727,7 @@ class PWNgress():
         background_layer.paste(new_machine_img, (width - flag_size - margin_size, margin_size), new_machine_img)
 
         # Frame image
-        frame_img = Image.open('../images/avatar_frame.png').convert("RGBA")
+        frame_img = Image.open("../images/avatar_frame.png").convert("RGBA")
         img_thumb = frame_img.copy()
         img = img_thumb.resize((height, height))
         background_layer.paste(img, (0, 0), img)
@@ -282,7 +740,7 @@ class PWNgress():
         font_htb_name_size = 32
         while True:
             font_htb_name = ImageFont.truetype(
-                "../images/" + self.font_htb_name,
+                self.font_htb_name,
                 size=font_htb_name_size,
                 layout_engine=0
             )
@@ -293,7 +751,7 @@ class PWNgress():
             else:
                 font_htb_name_size -= 1
 
-        font_message = ImageFont.truetype("../images/" + self.font_message, size=18, layout_engine=0)
+        font_message = ImageFont.truetype(self.font_message, size=18, layout_engine=0)
         if message[1] == "ROOT " or message[1] == "USER ":
             # Machine message
             x_pos_1 = width // 2 - font_message.getlength("".join(message)) // 2 + 5
@@ -331,7 +789,7 @@ class PWNgress():
 
         return notification_filename
 
-    def send_messages(self):
+    def send_member_solves_messages(self):
         """
         Sort saved messages and send them.
         """
@@ -349,7 +807,6 @@ class PWNgress():
 
         # Always empty message queue
         self.message_queue = {}
-
 
     def send_message(self, member_id, htb_name, activity_data):
         """
@@ -403,7 +860,7 @@ class PWNgress():
             }
 
             try:
-                r = requests.post(self.discord_webhook_url, files=image_file)
+                req = requests.post(self.discord_webhook_url, files=image_file)
             except Exception as err:
                 self.log.error("Failed to send Discord message")
                 self.log.error(traceback.print_exc())
@@ -412,7 +869,8 @@ class PWNgress():
 def main():
     settings = read_settings_file("settings/PWNgress_settings.cfg")
     PWNgress(settings["HTB_APP_TOKEN"], settings["HTB_TEAM_ID"], settings["DISCORD_WEBHOOK_URL"],
-             settings["FONT_HTB_NAME"], settings["FONT_MESSAGE"])
+             settings["FONT_HTB_NAME"], settings["FONT_MESSAGE"], settings["HTB_USERS_TO_IGNORE"],
+             settings["FONT_TABLE_HEADER"], settings["FONT_TABLE_NAMES"], settings["FONT_TABLE_DATA"])
 
 
 if __name__ == "__main__":
