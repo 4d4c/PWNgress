@@ -69,6 +69,7 @@ class PWNgress():
                         self.send_ranking_message()
                         last_rank_check_date = current_date
 
+            self.log.info("Sleeping for {} sec".format(delay))
             time.sleep(delay)
 
     def get_and_save_team_members(self):
@@ -100,7 +101,7 @@ class PWNgress():
         #     team_members_json_data = json.load(f)
 
         all_member_ids = [x[0] for x in self.db.select("id", "htb_team_members")]
-        # TODO: remove inactive users
+
         for member_data in team_members_json_data:
             # Ignore inactive users
             if str(member_data["id"]) == self.htb_users_to_ignore:
@@ -140,6 +141,16 @@ class PWNgress():
                         ("json_data", json.dumps(member_data))
                     ])
                 )
+
+        # Check if we need to delete any users (user left the team)
+        all_members_in_htb = [member_data["id"] for member_data in team_members_json_data]
+        users_to_remove = list(set(all_member_ids) - set(all_members_in_htb))
+        for user_to_remove in users_to_remove:
+            self.log.warning("Deleting user {}".format(user_to_remove))
+            self.db.delete(
+                "htb_team_members",
+                "id = '{}'".format(user_to_remove)
+            )
 
     def check_each_team_member_solves(self):
         """
