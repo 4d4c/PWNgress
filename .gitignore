@@ -2,6 +2,7 @@ database/*
 !database/schema.sql
 images/*
 !images/README.png
+!images/READMErank.png
 logs/*
 src/settings/*
 src/test/*
