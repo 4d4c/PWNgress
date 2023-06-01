@@ -4,6 +4,7 @@ from PIL import Image, ImageDraw, ImageFont
 import io
 import json
 import os
+import re
 import requests
 import textwrap
 import time
@@ -39,10 +40,9 @@ class PWNgress():
 
         self.message_queue = {}
 
-        # Run the script every minute
-        self.loop(60)
+        self.loop()
 
-    def loop(self, delay):
+    def loop(self):
         """
         Core part of the script. Currently, only tracking team activities is implemented.
         """
@@ -53,12 +53,9 @@ class PWNgress():
             self.check_each_team_member_solves()
             self.send_member_solves_messages()
 
-            # Only run once a week at 19:00 UTC
-            if datetime.today().weekday() == 6:
-                # Double check in case our previous tasks takes longer than a minute
-                if datetime.now().time().strftime("%H:%M") == "19:00" or\
-                   datetime.now().time().strftime("%H:%M") == "19:01":
-
+            # Only run once a week at 01:00 UTC
+            if datetime.today().weekday() == 5:
+                if datetime.now().time().strftime("%H") == "01":
                     current_date = datetime.now().strftime("%Y-%m-%d")
                     self.log.debug("Starting ranking check")
                     self.log.debug("    Current date   : {}".format(current_date))
@@ -69,8 +66,17 @@ class PWNgress():
                         self.send_ranking_message()
                         last_rank_check_date = current_date
 
-            self.log.info("Sleeping for {} sec".format(delay))
-            time.sleep(delay)
+            # We don't want to check pwns every minute through the week. Check pwns every minute from
+            # Sat 19:00 UTC to Sun 07:00. On all other days check every 30 minutes
+            self.log.debug("Day - {}".format(datetime.today().weekday()))
+            self.log.debug("Hour - {}".format(int(datetime.now().time().strftime("%H"))))
+            if datetime.today().weekday() == 5 and int(datetime.now().time().strftime("%H")) >= 19 or\
+               datetime.today().weekday() == 6 and int(datetime.now().time().strftime("%H")) <= 7:
+                self.log.info("Sleeping for {} sec".format(60))
+                time.sleep(60)
+            else:
+                self.log.info("Sleeping for {} sec".format(60 * 30))
+                time.sleep(60 * 30)
 
     def get_and_save_team_members(self):
         """
@@ -688,7 +694,10 @@ class PWNgress():
         margin_size = 15
 
         # Final image filename
-        notification_filename = "/tmp/PWN.png"
+        tmp_htb_name = re.sub('[^a-zA-Z]+', '', htb_name)
+        tmp_message_1 = re.sub('[^a-zA-Z]+', '', message[1])
+        tmp_message_2 = re.sub('[^a-zA-Z]+', '', message[2])
+        notification_filename = "/tmp/{}_{}_{}.png".format(tmp_htb_name, tmp_message_1, tmp_message_2)
 
         # Colors used in the notification
         background_color = (43, 45, 49)
@@ -863,7 +872,12 @@ class PWNgress():
             htb_flag_type = activity_data["object_type"]
 
         # Create notification image
-        notification_filename = self.create_image(htb_name, htb_user_avatar_url, htb_flag_type, message)
+        try:
+            notification_filename = self.create_image(htb_name, htb_user_avatar_url, htb_flag_type, message)
+        except Exception as err:
+            notification_filename = False
+            self.log.error("Failed to create notification image " + str(err))
+            return False
 
         # Send image to Discord
         if notification_filename:
@@ -877,6 +891,7 @@ class PWNgress():
                 self.log.error("Failed to send Discord message")
                 self.log.error(traceback.print_exc())
 
+            os.remove(notification_filename)
 
 def main():
     settings = read_settings_file("settings/PWNgress_settings.cfg")
