@@ -694,10 +694,10 @@ class PWNgress():
         margin_size = 15
 
         # Final image filename
-        tmp_htb_name = re.sub('[^a-zA-Z]+', '', htb_name)
-        tmp_message_1 = re.sub('[^a-zA-Z]+', '', message[1])
-        tmp_message_2 = re.sub('[^a-zA-Z]+', '', message[2])
-        notification_filename = "/tmp/{}_{}_{}.png".format(tmp_htb_name, tmp_message_1, tmp_message_2)
+        tmp_htb_name = re.sub('[^a-zA-Z0-9]+', '', htb_name).upper()
+        tmp_message_1 = re.sub('[^a-zA-Z0-9]+', '', message[1]).upper()
+        tmp_message_2 = re.sub('[^a-zA-Z0-9]+', '', message[2]).replace("machine", "").replace("challenge", "").upper()
+        notification_filename = "/tmp/{}-{}-{}.png".format(tmp_htb_name, tmp_message_1, tmp_message_2)
 
         # Colors used in the notification
         background_color = (43, 45, 49)
