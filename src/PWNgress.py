@@ -20,9 +20,10 @@ class PWNgress():
     PWNgress.
     """
 
-    def __init__(self, htb_app_token, htb_team_id, discord_webhook_url, font_htb_name, font_message,
-                 htb_users_to_ignore, font_table_header, font_table_names, font_table_data):
-        self.log = Lumberjack("../logs/PWNgress_events.log", True)
+    def __init__(self, htb_app_token, htb_team_id, discord_webhook_url_team, discord_webhook_url_alerts,
+                 font_htb_name, font_message, htb_users_to_ignore, font_table_header, font_table_names,
+                 font_table_data):
+        self.log = Lumberjack("../logs/PWNgress_events.log", False)
 
         self.db = SQLWizard("../database/PWNgress.sqlite")
 
@@ -30,7 +31,8 @@ class PWNgress():
 
         self.htb_app_token = htb_app_token
         self.htb_team_id = htb_team_id
-        self.discord_webhook_url = discord_webhook_url
+        self.discord_webhook_url_team = discord_webhook_url_team
+        self.discord_webhook_url_alerts = discord_webhook_url_alerts
         self.font_htb_name = font_htb_name
         self.font_message = font_message
         self.htb_users_to_ignore = htb_users_to_ignore.split(",")
@@ -78,6 +80,28 @@ class PWNgress():
                 self.log.info("Sleeping for {} sec".format(60 * 30))
                 time.sleep(60 * 30)
 
+    def error_handler(self, error_message, traceback_message):
+        """
+        Send error message to Discord server using webhook (DISCORD_WEBHOOK_URL_ALERTS).
+        """
+
+        self.log.error(error_message)
+        self.log.error(traceback_message)
+
+        try:
+            headers = {
+                "Content-Type": "application/json"
+            }
+
+            message_data = {
+                "content": "```" + "[-] ERROR: " + error_message + "\n\n" + traceback_message + "```"
+            }
+
+            req = requests.post(self.discord_webhook_url_alerts, headers=headers, json=message_data)
+        except Exception as err:
+            self.log.error("Failed to send an alert message " + str(err))
+            self.log.error(traceback.format_exc())
+
     def get_and_save_team_members(self):
         """
         Get all team members and save them to the local database.
@@ -98,7 +122,7 @@ class PWNgress():
             req = requests.get(team_members_link, headers=headers)
             team_members_json_data = json.loads(req.text)
         except Exception as err:
-            self.log.error("Failed to get team members " + str(err))
+            self.error_handler("Failed to get team members " + str(err), traceback.format_exc())
             return
 
         # with open("test/test_team_members.json", "w") as f:
@@ -229,7 +253,7 @@ class PWNgress():
         Get user activities.
         """
 
-        self.log.info("Checking user activities {} ({})".format(member_name, user_id))
+        self.log.debug("Checking user activities {} ({})".format(member_name, user_id))
 
         try:
             team_activity_link = "https://www.hackthebox.com" \
@@ -248,7 +272,7 @@ class PWNgress():
 
             return user_activities
         except Exception as err:
-            self.log.error("Failed to get member activities " + str(err))
+            self.error_handler("Failed to get member activities " + str(err), traceback.format_exc())
             return ""
 
     def get_team_ranking(self):
@@ -275,7 +299,7 @@ class PWNgress():
             req = requests.get(team_stats_link, headers=headers)
             team_stats_data = json.loads(req.text)
         except Exception as err:
-            self.log.error("Failed to get team ranking data " + str(err))
+            self.error_handler("Failed to get team ranking data " + str(err), traceback.format_exc())
             return
 
         rank_date = datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
@@ -342,7 +366,7 @@ class PWNgress():
                 member_prolab_data = json.loads(req.text)
 
             except Exception as err:
-                self.log.error("Failed to get member ranking data " + str(err))
+                self.error_handler("Failed to get member ranking data " + str(err), traceback.format_exc())
                 return
 
             fortress_count = 0
@@ -428,7 +452,7 @@ class PWNgress():
         #     req = requests.post(self.discord_webhook_url, headers=headers, json=message_data)
         # except Exception as err:
         #     self.log.error("Failed to send Discord message")
-        #     self.log.error(traceback.print_exc())
+        #     self.log.error(traceback.format_exc())
 
         # Get 25 team members from the database. We limit it to 25 so ranking image doesn't get too big
         found_member_rows = self.db.select(
@@ -494,10 +518,9 @@ class PWNgress():
         }
 
         try:
-            req = requests.post(self.discord_webhook_url, files=image_file)
+            req = requests.post(self.discord_webhook_url_team, files=image_file)
         except Exception as err:
-            self.log.error("Failed to send Discord message")
-            self.log.error(traceback.print_exc())
+            self.error_handler("Failed to send Discord message " + str(err), traceback.format_exc())
 
     def create_table_image(self, table_data, avatar_links):
         """
@@ -661,7 +684,7 @@ class PWNgress():
             try:
                 req = requests.get(avatar_link, headers=headers)
             except Exception as err:
-                self.log.error("Failed to get member image " + str(err))
+                self.error_handler("Failed to get member image " + str(err), traceback.format_exc())
 
             htb_avatar_image = Image.open(io.BytesIO(req.content))
 
@@ -721,7 +744,7 @@ class PWNgress():
         try:
             req = requests.get(htb_user_avatar_url, headers=headers)
         except Exception as err:
-            self.log.error("Failed to get member image " + str(err))
+            self.error_handler("Failed to get member image " + str(err), traceback.format_exc())
             return False
 
         # Create Discord image
@@ -736,7 +759,7 @@ class PWNgress():
                 req = requests.get(htb_flag_type, headers=headers)
                 machine_img = Image.open(io.BytesIO(req.content))
             except Exception as err:
-                self.log.error("Failed to get machine image " + str(err))
+                self.error_handler("Failed to get machine image " + str(err), traceback.format_exc())
                 return False
         else:
             # If it's challenge, endgame or fortress flag we use local image
@@ -876,7 +899,7 @@ class PWNgress():
             notification_filename = self.create_image(htb_name, htb_user_avatar_url, htb_flag_type, message)
         except Exception as err:
             notification_filename = False
-            self.log.error("Failed to create notification image " + str(err))
+            self.error_handler("Failed to create notification image " + str(err), traceback.format_exc())
             return False
 
         # Send image to Discord
@@ -886,18 +909,18 @@ class PWNgress():
             }
 
             try:
-                req = requests.post(self.discord_webhook_url, files=image_file)
+                req = requests.post(self.discord_webhook_url_team, files=image_file)
             except Exception as err:
-                self.log.error("Failed to send Discord message")
-                self.log.error(traceback.print_exc())
+                self.error_handler("Failed to send Discord message " + str(err), traceback.format_exc())
 
             os.remove(notification_filename)
 
 def main():
     settings = read_settings_file("settings/PWNgress_settings.cfg")
-    PWNgress(settings["HTB_APP_TOKEN"], settings["HTB_TEAM_ID"], settings["DISCORD_WEBHOOK_URL"],
-             settings["FONT_HTB_NAME"], settings["FONT_MESSAGE"], settings["HTB_USERS_TO_IGNORE"],
-             settings["FONT_TABLE_HEADER"], settings["FONT_TABLE_NAMES"], settings["FONT_TABLE_DATA"])
+    PWNgress(settings["HTB_APP_TOKEN"], settings["HTB_TEAM_ID"], settings["DISCORD_WEBHOOK_URL_TEAM"],
+             settings["DISCORD_WEBHOOK_URL_ALERTS"], settings["FONT_HTB_NAME"], settings["FONT_MESSAGE"],
+             settings["HTB_USERS_TO_IGNORE"], settings["FONT_TABLE_HEADER"], settings["FONT_TABLE_NAMES"],
+             settings["FONT_TABLE_DATA"])
 
 
 if __name__ == "__main__":
