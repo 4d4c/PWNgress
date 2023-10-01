@@ -8,3 +8,4 @@ src/settings/*
 src/test/*
 src/utils/*
 !src/utils/utils.py
+!src/utils/monitor_container_status.sh
