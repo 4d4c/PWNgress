@@ -94,7 +94,8 @@ class PWNgress():
             }
 
             message_data = {
-                "content": "```" + "[-] ERROR: " + error_message + "\n\n" + traceback_message + "```"
+                "content": "```" + "[-] ERROR: " + error_message + "\n\n" +\
+                           traceback_message[:1000] + "...\n...```"
             }
 
             req = requests.post(self.discord_webhook_url_alerts, headers=headers, json=message_data)
@@ -135,7 +136,7 @@ class PWNgress():
         for member_data in team_members_json_data:
             # Ignore inactive users
             if str(member_data["id"]) in self.htb_users_to_ignore:
-                self.log.warning("Ignoring user {} ({})".format(
+                self.log.debug("Ignoring user {} ({})".format(
                     member_data["name"],
                     member_data["id"]
                 ))
@@ -239,14 +240,6 @@ class PWNgress():
                         "member_name": member_name,
                         "activity_data": activity_data
                     }
-
-            self.db.update(
-                "htb_team_members",
-                OrderedDict([
-                    ("last_flag_date", activity_data["date"])
-                ]),
-                "id = '{}'".format(member_id)
-            )
 
     def get_user_activities(self, member_name, user_id):
         """
@@ -843,11 +836,18 @@ class PWNgress():
         if self.message_queue:
             sorted_message_queue = OrderedDict(sorted(self.message_queue.items()))
             for _, message_data in sorted_message_queue.items():
-                self.send_message(
+                if self.send_message(
                     message_data["member_id"],
                     message_data["member_name"],
                     message_data["activity_data"]
-                )
+                ):
+                    self.db.update(
+                        "htb_team_members",
+                        OrderedDict([
+                            ("last_flag_date", message_data["activity_data"]["date"])
+                        ]),
+                        "id = '{}'".format(message_data["member_id"])
+                    )
 
         # Always empty message queue
         self.message_queue = {}
@@ -912,8 +912,12 @@ class PWNgress():
                 req = requests.post(self.discord_webhook_url_team, files=image_file)
             except Exception as err:
                 self.error_handler("Failed to send Discord message " + str(err), traceback.format_exc())
+                os.remove(notification_filename)
+                return False
 
             os.remove(notification_filename)
+
+        return True
 
 def main():
     settings = read_settings_file("settings/PWNgress_settings.cfg")
