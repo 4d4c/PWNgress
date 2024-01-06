@@ -141,6 +141,26 @@ class PWNgress():
                     member_data["id"]
                 ))
                 continue
+            # Because of an issue with HTB APIs all ranks are set to "unranked"
+            # We need to manually pull ranks from the members API instead of team API
+            try:
+                member_basic_link = "https://www.hackthebox.com" \
+                                    "/api/v4/user/profile/basic/{}".format(member_data["id"])
+                headers = {
+                    "Authorization": "Bearer " + self.htb_app_token,
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0)"
+                                  "Gecko/20100101 Firefox/111.0"
+                }
+
+                req = requests.get(member_basic_link, headers=headers)
+                member_basic_data = json.loads(req.text)
+
+            except Exception as err:
+                self.error_handler("Failed to get member rank data (fix) " + str(err), traceback.format_exc())
+                return
+
+            member_rank = member_basic_data["profile"]["ranking"]
+
             # Check if the team member is already in the database
             if member_data["id"] in all_member_ids:
                 self.log.debug("Team member {} ({}) already in the database".format(
@@ -153,7 +173,8 @@ class PWNgress():
                         ("htb_name", member_data["name"]),
                         ("htb_avatar", "https://www.hackthebox.com" + member_data["avatar"]),
                         ("points", member_data["points"]),
-                        ("rank", member_data["rank"]),
+                        ("rank", member_rank),
+                        # ("rank", member_data["rank"]),
                         ("json_data", json.dumps(member_data))
                     ]),
                     "id = '{}'".format(member_data["id"])
@@ -172,7 +193,8 @@ class PWNgress():
                         ("htb_avatar", "https://www.hackthebox.com" + member_data["avatar"]),
                         ("last_flag_date", ""),  # Leave last flag empty as we don't know it yet
                         ("points", member_data["points"]),
-                        ("rank", member_data["rank"]),
+                        ("rank", member_rank),
+                        # ("rank", member_data["rank"]),
                         ("json_data", json.dumps(member_data))
                     ])
                 )
@@ -381,7 +403,7 @@ class PWNgress():
                     ("id", member_id),
                     ("rank_date", rank_date),
                     ("htb_name", member_name),
-                    ("rank", member_rank),
+                    ("rank", member_basic_data["profile"]["ranking"]),
                     ("points", member_points),
                     ("user_owns", member_basic_data["profile"]["user_owns"]),
                     ("system_owns", member_basic_data["profile"]["system_owns"]),
@@ -469,7 +491,6 @@ class PWNgress():
                 "member_ranking",
                 "id = {} ORDER BY rank_date DESC LIMIT 2".format(member_id)
             )
-
             last_two_ranking_data_first = last_two_ranking_data[0]
             # If it's a new member we don't have previous weeks data. Add all user ranking as 0 (no changes)
             if len(last_two_ranking_data) == 1:
